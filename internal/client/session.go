@@ -91,9 +91,26 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg.ReconnectInterval = 2 * time.Second
 	}
 	if cfg.Dialer == nil {
-		cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, network, addr)
+		if cfg.ServerAddr == "" || cfg.ServerAddr == "mock" || cfg.ServerAddr == "dry-run" {
+			cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				c1, c2 := net.Pipe()
+				go func() {
+					buf := make([]byte, 1024)
+					for {
+						_, err := c2.Read(buf)
+						if err != nil {
+							_ = c2.Close()
+							return
+						}
+					}
+				}()
+				return c1, nil
+			}
+		} else {
+			cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, addr)
+			}
 		}
 	}
 
@@ -218,7 +235,9 @@ func (s *RoleSession) runLoop() {
 		}
 
 		// 1. 建立 TCP Socket 连接
-		s.setState(StateConnecting)
+		if s.State() != StateReconnecting {
+			s.setState(StateConnecting)
+		}
 		conn, err := s.cfg.Dialer(s.ctx, "tcp", s.cfg.ServerAddr)
 		if err != nil {
 			if !s.handleConnectFailure(err) {
@@ -278,10 +297,23 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	}
 
 	s.setState(StateReconnecting)
+
+	// 计算指数退避等待时间：从 ReconnectInterval 开始递增，上限 30 秒
+	backoffMultiplier := 1
+	if s.reconnectAttempts > 1 {
+		shift := min(s.reconnectAttempts-1, 4)
+		backoffMultiplier = 1 << shift
+	}
+	waitDuration := s.cfg.ReconnectInterval * time.Duration(backoffMultiplier)
+	if waitDuration > 30*time.Second {
+		waitDuration = 30 * time.Second
+	}
+
 	slog.Warn("网络连接中断，等待重连",
 		"role_id", s.cfg.RoleID,
+		"server_addr", s.cfg.ServerAddr,
 		"attempts", s.reconnectAttempts,
-		"interval", s.cfg.ReconnectInterval,
+		"retry_in", waitDuration,
 		"error", err,
 	)
 
@@ -289,7 +321,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	case <-s.ctx.Done():
 		s.setState(StateClosed)
 		return false
-	case <-time.After(s.cfg.ReconnectInterval):
+	case <-time.After(waitDuration):
 		return true
 	}
 }

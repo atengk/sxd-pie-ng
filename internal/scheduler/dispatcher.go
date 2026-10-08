@@ -107,3 +107,16 @@ func (d *Dispatcher) StopAll() {
 		sched.Stop()
 	}
 }
+
+// TriggerBatch 为所有受管角色的调度器统一触发指定类型的批量任务唤醒。
+func (d *Dispatcher) TriggerBatch(schedType ScheduleType) int {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	total := 0
+	for _, sched := range d.schedulers {
+		total += sched.TriggerBatch(schedType)
+	}
+	return total
+}
+

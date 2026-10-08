@@ -135,3 +135,94 @@ func TestLogBuffer_Capacity(t *testing.T) {
 		t.Errorf("expected [3, 4, 5], got %+v", logs)
 	}
 }
+
+type mockRoutineProvider struct {
+	routines []web.RoutineStatus
+}
+
+func (m *mockRoutineProvider) ListRoutines() []web.RoutineStatus {
+	return m.routines
+}
+
+func (m *mockRoutineProvider) ToggleRoutine(id string, enabled bool) error {
+	for i := range m.routines {
+		if m.routines[i].ID == id {
+			m.routines[i].Enabled = enabled
+			return nil
+		}
+	}
+	return nil
+}
+
+func (m *mockRoutineProvider) ApplyPreset(preset string) error {
+	for i := range m.routines {
+		if preset == "all" {
+			m.routines[i].Enabled = true
+		} else if preset == "none" {
+			m.routines[i].Enabled = false
+		}
+	}
+	return nil
+}
+
+func TestWebServer_RoutinesAPI(t *testing.T) {
+	mockP := &mockRoutineProvider{
+		routines: []web.RoutineStatus{
+			{ID: "herb_garden", Name: "药园种植", Domain: "farming", Enabled: true, State: "Active"},
+			{ID: "arena", Name: "竞技场", Domain: "pvp", Enabled: false, State: "Disabled"},
+		},
+	}
+
+	srv := web.NewServer("127.0.0.1", 0, nil, nil, "v1.0.0")
+	srv.SetRoutineProvider(mockP)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer func() {
+		_ = srv.Shutdown(context.Background())
+	}()
+
+	baseURL := fmt.Sprintf("http://%s", srv.Addr())
+
+	// 1. GET /api/routines
+	resp, err := http.Get(baseURL + "/api/routines")
+	if err != nil {
+		t.Fatalf("GET /api/routines failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var list []web.RoutineStatus
+	_ = json.NewDecoder(resp.Body).Decode(&list)
+	if len(list) != 2 {
+		t.Fatalf("expected 2 routines, got %d", len(list))
+	}
+
+	// 2. POST /api/routines (Toggle)
+	toggleBody := strings.NewReader(`{"id": "arena", "enabled": true}`)
+	postResp, err := http.Post(baseURL+"/api/routines", "application/json", toggleBody)
+	if err != nil {
+		t.Fatalf("POST /api/routines failed: %v", err)
+	}
+	postResp.Body.Close()
+
+	if !mockP.routines[1].Enabled {
+		t.Error("expected arena to be enabled after toggle")
+	}
+
+	// 3. POST /api/routines (Preset)
+	presetBody := strings.NewReader(`{"preset": "none"}`)
+	presetResp, err := http.Post(baseURL+"/api/routines", "application/json", presetBody)
+	if err != nil {
+		t.Fatalf("POST /api/routines preset failed: %v", err)
+	}
+	presetResp.Body.Close()
+
+	if mockP.routines[0].Enabled || mockP.routines[1].Enabled {
+		t.Error("expected all routines to be disabled after preset none")
+	}
+}
+
