@@ -1,3 +1,7 @@
+// Package routines_test 提供玩法活动注册中心与子域玩法的测试用例。
+//
+// @author Ateng
+// @since 2026-10-08
 package routines_test
 
 import (
@@ -15,8 +19,8 @@ import (
 
 func TestRoutines_DefinitionsAndRegistry(t *testing.T) {
 	defs := routines.GetAllDefinitions()
-	if len(defs) < 20 {
-		t.Fatalf("预期玩法定义数量 >= 20, 实际为 %d", len(defs))
+	if len(defs) < 30 {
+		t.Fatalf("预期玩法定义数量 >= 30, 实际为 %d", len(defs))
 	}
 
 	// 验证涵盖六大领域
@@ -85,4 +89,15 @@ func TestSubdomains_Instances(t *testing.T) {
 	if m.Name() != "lucky_star" {
 		t.Errorf("lucky_star name mismatch: %s", m.Name())
 	}
+
+	gr := farming.NewGourdRealmRoutine(nil)
+	if gr.Name() != "gourd_realm" {
+		t.Errorf("gourd_realm name mismatch: %s", gr.Name())
+	}
+
+	ie := minigame.NewImperialExamRoutine(nil)
+	if ie.Name() != "imperial_exam" {
+		t.Errorf("imperial_exam name mismatch: %s", ie.Name())
+	}
 }
+

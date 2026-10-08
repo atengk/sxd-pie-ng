@@ -10,13 +10,12 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/qa"
-	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/scheduler"
 )
 
 // NewLuckyStarRoutine 构造帮派吉星高照扔骰子任务。
 func NewLuckyStarRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"lucky_star",
 		"minigame",
 		scheduler.ScheduleCron,
@@ -31,7 +30,7 @@ func NewLuckyStarRoutine() scheduler.ActivityRoutine {
 
 // NewImmortalFantasyRoutine 构造仙履奇缘与金榜题名自动问答任务。
 func NewImmortalFantasyRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"immortal_fantasy",
 		"minigame",
 		scheduler.ScheduleCron,
@@ -54,7 +53,7 @@ func NewImmortalFantasyRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
 
 // NewPartnerGuessRoutine 构造伙伴猜猜看趣味活动。
 func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"partner_guess",
 		"minigame",
 		scheduler.ScheduleCron,
@@ -69,7 +68,7 @@ func NewPartnerGuessRoutine() scheduler.ActivityRoutine {
 
 // NewFishingRoutine 构造自动钓鱼与命格整理任务。
 func NewFishingRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"fishing",
 		"minigame",
 		scheduler.ScheduleCron,
@@ -84,7 +83,7 @@ func NewFishingRoutine() scheduler.ActivityRoutine {
 
 // NewScratchCardRoutine 构造刮刮卡福利任务。
 func NewScratchCardRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"scratch_card",
 		"minigame",
 		scheduler.ScheduleCron,
@@ -99,7 +98,7 @@ func NewScratchCardRoutine() scheduler.ActivityRoutine {
 
 // NewIceCaveRoutine 构造一键冰窟探险任务。
 func NewIceCaveRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"ice_cave",
 		"minigame",
 		scheduler.ScheduleCron,
@@ -111,3 +110,26 @@ func NewIceCaveRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
+
+// NewImperialExamRoutine 构造金榜题名会试自动答题任务。
+func NewImperialExamRoutine(qaEngine qa.Engine) scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"imperial_exam",
+		"minigame",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			slog.Info("正在执行益智任务: 金榜题名会试科举智能答题")
+			if qaEngine != nil {
+				sampleQ := "李白字什么？"
+				ans, conf, found := qaEngine.Match(sampleQ)
+				if found {
+					slog.Debug("金榜题名答题决策成功", "question", sampleQ, "answer", ans, "confidence", conf)
+				}
+			}
+			return nil
+		},
+	)
+}
+

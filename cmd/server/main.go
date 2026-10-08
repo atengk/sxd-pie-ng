@@ -84,6 +84,9 @@ func (rm *routineManager) ToggleRoutine(id string, enabled bool) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.enabledMap[id] = enabled
+	for _, s := range rm.schedulers {
+		s.SetRoutineEnabled(id, enabled)
+	}
 	return nil
 }
 
@@ -96,14 +99,23 @@ func (rm *routineManager) ApplyPreset(preset string) error {
 	case "all":
 		for _, d := range defs {
 			rm.enabledMap[d.ID] = true
+			for _, s := range rm.schedulers {
+				s.SetRoutineEnabled(d.ID, true)
+			}
 		}
 	case "none":
 		for _, d := range defs {
 			rm.enabledMap[d.ID] = false
+			for _, s := range rm.schedulers {
+				s.SetRoutineEnabled(d.ID, false)
+			}
 		}
 	case "recommended":
 		for _, d := range defs {
 			rm.enabledMap[d.ID] = d.DefaultOn
+			for _, s := range rm.schedulers {
+				s.SetRoutineEnabled(d.ID, d.DefaultOn)
+			}
 		}
 	}
 	return nil
@@ -272,6 +284,31 @@ func run(ctx context.Context, args []string) error {
 	}
 
 	dispatcher.StartAll(ctx)
+
+	// 启动定点 Cron 调度监控时钟 (比对配置的 cron_times 自动批量唤醒)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		lastTriggerMinute := ""
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-ticker.C:
+				currentMinute := now.Format("15:04")
+				if currentMinute != lastTriggerMinute {
+					for _, cronTime := range cfg.Scheduler.CronTimes {
+						if currentMinute == cronTime {
+							lastTriggerMinute = currentMinute
+							triggered := dispatcher.TriggerBatch(scheduler.ScheduleCron)
+							slog.Info("触发定点日常重置批量唤醒", "time", currentMinute, "triggered_count", triggered)
+							break
+						}
+					}
+				}
+			}
+		}
+	}()
 
 	// 4. 启动 Web 控制台服务并注入玩法管理提供器
 	webServer := web.NewServer(cfg.Server.Host, cfg.Server.Port, mgr, logBuf, Version)

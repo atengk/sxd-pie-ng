@@ -28,6 +28,9 @@ type Engine interface {
 	Size() int
 }
 
+// QABank 为 Engine 的语义契约别名。
+type QABank = Engine
+
 type entry struct {
 	normalizedQ string
 	answer      string
@@ -146,7 +149,8 @@ func (e *memoryEngine) loadFile(path string) error {
 
 		// 格式形如 答案=内容 或 答案: 内容
 		if strings.HasPrefix(line, "答案=") || strings.HasPrefix(line, "答案:") {
-			ans := strings.TrimSpace(line[strings.Index(line, "=")+1:])
+			sepIdx := strings.IndexAny(line, "=:")
+			ans := strings.TrimSpace(line[sepIdx+1:])
 			if currentQ != "" && ans != "" {
 				normQ := Normalize(currentQ)
 				if normQ != "" && e.exactMap[normQ] == "" {

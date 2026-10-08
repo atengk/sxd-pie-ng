@@ -1,3 +1,7 @@
+// Package qa_test 提供三级漏斗问答引擎的测试用例。
+//
+// @author Ateng
+// @since 2026-10-08
 package qa_test
 
 import (

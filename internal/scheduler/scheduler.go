@@ -21,6 +21,7 @@ type scheduledItem struct {
 	lastRun      time.Time
 	coolingUntil time.Time
 	runCount     int
+	disabled     bool
 }
 
 // RoleScheduler 为特定角色会话提供专属且隔离的任务调度器。
@@ -50,6 +51,20 @@ func NewRoleScheduler(roleID string, session *client.RoleSession, jitter *Jitter
 		jitter:  jitter,
 		items:   make([]*scheduledItem, 0),
 	}
+}
+
+// SetRoutineEnabled 动态启用或禁用特定任务。
+func (s *RoleScheduler) SetRoutineEnabled(name string, enabled bool) bool {
+	s.itemsMu.Lock()
+	defer s.itemsMu.Unlock()
+
+	for _, it := range s.items {
+		if it.routine.Name() == name {
+			it.disabled = !enabled
+			return true
+		}
+	}
+	return false
 }
 
 // Register 注册一个日常活动任务到调度队列。
@@ -178,8 +193,15 @@ func (s *RoleScheduler) runLoop() {
 		}
 
 		// 处理执行周期更新或单次任务移除
+		isCron := false
+		if det, ok := item.routine.(DetailedRoutine); ok && det.ScheduleType() == ScheduleCron {
+			isCron = true
+		}
 		if item.routine.Interval() > 0 {
 			item.nextRun = time.Now().Add(item.routine.Interval())
+		} else if isCron {
+			// 定点任务等待下一次 TriggerBatch 唤醒或次日重置
+			item.nextRun = time.Now().Add(24 * time.Hour)
 		} else {
 			s.removeItemLocked(item)
 		}
@@ -194,6 +216,9 @@ func (s *RoleScheduler) pickNextReadyItem() *scheduledItem {
 	now := time.Now()
 	var candidates []*scheduledItem
 	for _, it := range s.items {
+		if it.disabled {
+			continue
+		}
 		// 校验就绪时间与熔断冷却期
 		isReady := now.After(it.nextRun) || now.Equal(it.nextRun)
 		isCooled := it.coolingUntil.IsZero() || now.After(it.coolingUntil) || now.Equal(it.coolingUntil)

@@ -322,3 +322,60 @@ func TestScheduler_SemanticCoolingOff(t *testing.T) {
 	sched.Stop()
 }
 
+func TestScheduler_SetRoutineEnabledAndDispatcherBatch(t *testing.T) {
+	disp := scheduler.NewDispatcher()
+	sched, err := disp.AddRole("role-batch", nil, scheduler.JitterConfig{
+		MinDuration: 5 * time.Millisecond,
+		MaxDuration: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("AddRole failed: %v", err)
+	}
+
+	runChan := make(chan struct{}, 10)
+	var runCount atomic.Int32
+	cronRoutine := scheduler.NewBaseRoutine(
+		"cron_task",
+		"daily",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			runCount.Add(1)
+			runChan <- struct{}{}
+			return nil
+		},
+	)
+	_ = sched.Register(cronRoutine)
+
+	// 测试禁用
+	sched.SetRoutineEnabled("cron_task", false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	disp.StartAll(ctx)
+
+	time.Sleep(30 * time.Millisecond)
+	if count := runCount.Load(); count != 0 {
+		t.Fatalf("已禁用任务不应执行，实际执行了 %d 次", count)
+	}
+
+	// 重新启用
+	sched.SetRoutineEnabled("cron_task", true)
+	// 通过 Dispatcher 批量触发 Cron 任务
+	triggered := disp.TriggerBatch(scheduler.ScheduleCron)
+	if triggered == 0 {
+		t.Fatal("Dispatcher.TriggerBatch 预期触发 >= 1 项任务")
+	}
+
+	select {
+	case <-runChan:
+		// 成功执行
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("启用并触发后任务超时未被执行")
+	}
+
+	disp.StopAll()
+}
+
+

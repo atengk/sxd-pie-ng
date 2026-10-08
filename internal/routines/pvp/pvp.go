@@ -9,13 +9,12 @@ import (
 	"log/slog"
 
 	"sxd-pie-ng/internal/client"
-	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/scheduler"
 )
 
 // NewArenaRoutine 构造本服竞技场挑战任务。
 func NewArenaRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"arena",
 		"pvp",
 		scheduler.ScheduleCron,
@@ -30,7 +29,7 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 
 // NewCelestialArenaRoutine 构造仙界竞技场挑战与下注任务。
 func NewCelestialArenaRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"celestial_arena",
 		"pvp",
 		scheduler.ScheduleCron,
@@ -45,7 +44,7 @@ func NewCelestialArenaRoutine() scheduler.ActivityRoutine {
 
 // NewGodsAndDemonsRoutine 构造神魔大战限时活动任务。
 func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"gods_and_demons",
 		"pvp",
 		scheduler.ScheduleCron,
@@ -60,7 +59,7 @@ func NewGodsAndDemonsRoutine() scheduler.ActivityRoutine {
 
 // NewCaravanHijackRoutine 构造阵营劫镖任务。
 func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"caravan_hijack",
 		"pvp",
 		scheduler.ScheduleCron,
@@ -72,3 +71,34 @@ func NewCaravanHijackRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
+
+// NewWorldBossRoutine 构造世界Boss击杀争夺任务。
+func NewWorldBossRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"world_boss",
+		"pvp",
+		scheduler.ScheduleCron,
+		scheduler.PriorityHigh,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			slog.Info("正在执行对抗任务: 世界Boss准时参战与鼓舞输出")
+			return nil
+		},
+	)
+}
+
+// NewCrossServerLadderRoutine 构造跨服天梯争霸挑战任务。
+func NewCrossServerLadderRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"cross_server_ladder",
+		"pvp",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			slog.Info("正在执行对抗任务: 跨服天梯排位挑战与段位领奖")
+			return nil
+		},
+	)
+}
+

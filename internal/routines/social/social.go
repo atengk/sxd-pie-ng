@@ -9,13 +9,12 @@ import (
 	"log/slog"
 
 	"sxd-pie-ng/internal/client"
-	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/scheduler"
 )
 
 // NewGuildActivitiesRoutine 构造仙盟神兽与捐献任务。
 func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"guild_activities",
 		"social",
 		scheduler.ScheduleCron,
@@ -30,7 +29,7 @@ func NewGuildActivitiesRoutine() scheduler.ActivityRoutine {
 
 // NewSacredAllianceRoutine 构造圣盟祭祀与幻魔塔任务。
 func NewSacredAllianceRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"sacred_alliance",
 		"social",
 		scheduler.ScheduleCron,
@@ -45,7 +44,7 @@ func NewSacredAllianceRoutine() scheduler.ActivityRoutine {
 
 // NewHomesteadRoutine 构造住宅家具祝福与夫妻宝箱任务。
 func NewHomesteadRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"homestead",
 		"social",
 		scheduler.ScheduleCron,
@@ -60,7 +59,7 @@ func NewHomesteadRoutine() scheduler.ActivityRoutine {
 
 // NewFriendshipRoutine 构造好友结义与鲜花赠送任务。
 func NewFriendshipRoutine() scheduler.ActivityRoutine {
-	return routines.NewBaseRoutine(
+	return scheduler.NewBaseRoutine(
 		"friendship",
 		"social",
 		scheduler.ScheduleCron,
@@ -72,3 +71,19 @@ func NewFriendshipRoutine() scheduler.ActivityRoutine {
 		},
 	)
 }
+
+// NewFameBlessingRoutine 构造仙界膜拜大神与声望祝福任务。
+func NewFameBlessingRoutine() scheduler.ActivityRoutine {
+	return scheduler.NewBaseRoutine(
+		"fame_blessing",
+		"social",
+		scheduler.ScheduleCron,
+		scheduler.PriorityNormal,
+		0,
+		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
+			slog.Info("正在执行社交任务: 膜拜大神尊像与声望领用")
+			return nil
+		},
+	)
+}
+

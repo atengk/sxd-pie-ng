@@ -1,3 +1,7 @@
+// Package dictionary_test 提供数据字典仓储模块的黑盒行为测试。
+//
+// @author Ateng
+// @since 2026-10-08
 package dictionary_test
 
 import (
