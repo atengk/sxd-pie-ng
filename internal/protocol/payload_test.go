@@ -14,10 +14,13 @@ import (
 func TestPayload_WriterAndReader_Roundtrip(t *testing.T) {
 	w := protocol.NewWriter()
 	w.WriteUint8(42)
+	w.WriteInt8(-12)
 	w.WriteUint16(10086)
+	w.WriteInt16(-5432)
 	w.WriteUint32(12345678)
 	w.WriteInt32(-987654)
 	w.WriteString("神仙道助手-sxd-pie-ng")
+	w.WriteString32("long-prefix-string-s813")
 	rawBytes := []byte{0xDE, 0xAD, 0xBE, 0xEF}
 	w.WriteBytes(rawBytes)
 
@@ -30,9 +33,19 @@ func TestPayload_WriterAndReader_Roundtrip(t *testing.T) {
 		t.Fatalf("ReadUint8 failed: got %d, err %v", u8, err)
 	}
 
+	i8, err := r.ReadInt8()
+	if err != nil || i8 != -12 {
+		t.Fatalf("ReadInt8 failed: got %d, err %v", i8, err)
+	}
+
 	u16, err := r.ReadUint16()
 	if err != nil || u16 != 10086 {
 		t.Fatalf("ReadUint16 failed: got %d, err %v", u16, err)
+	}
+
+	i16, err := r.ReadInt16()
+	if err != nil || i16 != -5432 {
+		t.Fatalf("ReadInt16 failed: got %d, err %v", i16, err)
 	}
 
 	u32, err := r.ReadUint32()
@@ -48,6 +61,11 @@ func TestPayload_WriterAndReader_Roundtrip(t *testing.T) {
 	str, err := r.ReadString()
 	if err != nil || str != "神仙道助手-sxd-pie-ng" {
 		t.Fatalf("ReadString failed: got %s, err %v", str, err)
+	}
+
+	str32, err := r.ReadString32()
+	if err != nil || str32 != "long-prefix-string-s813" {
+		t.Fatalf("ReadString32 failed: got %s, err %v", str32, err)
 	}
 
 	readBytes, err := r.ReadBytes(len(rawBytes))

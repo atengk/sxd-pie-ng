@@ -38,6 +38,13 @@ type SessionConfig struct {
 	// Token 平台认证授权票据
 	Token string
 
+	// ServerID 游戏区服标识符 (如 "fengwanyx_s813")
+	ServerID string
+	// Time1 动态登录时间戳 (来源于 HTTP 网关 Session Cookie)
+	Time1 int32
+	// Hash1 动态验签散列 (来源于 HTTP 网关 Session Cookie)
+	Hash1 string
+
 	// HeartbeatInterval 心跳定时保活间隔 (默认 60s)
 	HeartbeatInterval time.Duration
 	// HeartbeatTimeout 心跳超时时间 (默认 15s)
@@ -488,6 +495,22 @@ func runMockGameServer(conn net.Conn) {
 			infoPkt := protocol.NewPacket(protocol.ActionPlayerInfo, w.Bytes())
 			_ = protocol.WritePacket(conn, infoPkt)
 
+		case protocol.ActionIDStLogin:
+			// 响应跨服登录成功，并推送 0x0300 初始体力
+			res := protocol.StLoginResult{
+				Result:     0,
+				PlayerID:   65536,
+				ServerTime: 1791469358,
+			}
+			resPkt, _ := protocol.BuildStLoginResultPacket(res)
+			_ = protocol.WritePacket(conn, resPkt)
+
+			// 推送体力 200 点 (Mod_Player_Base 0x0300)
+			upw := protocol.NewWriter()
+			upw.WriteUint8(protocol.PlayerPropPower)
+			upw.WriteInt32(200)
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerUpdateData, upw.Bytes()))
+
 		case protocol.ActionHeartbeat:
 			// 响应心跳包
 			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{})
@@ -507,6 +530,31 @@ func runMockGameServer(conn net.Conn) {
 					Message:   "扫荡完成",
 				}
 				resPkt, _ := protocol.BuildSweepResultPacket(res)
+				_ = protocol.WritePacket(conn, resPkt)
+			}
+
+		case protocol.ActionIDPracticeStart:
+			// 响应 Mod_MissionPractice_Base 开始扫荡包
+			req, err := protocol.ParseStartPracticeRequest(pkt.Payload)
+			if err == nil {
+				res := protocol.StartPracticeResult{
+					Result:    protocol.PracticeResultSuccess,
+					MissionID: req.MissionID,
+					Count:     req.Count,
+				}
+				resPkt, _ := protocol.BuildStartPracticeResultPacket(res)
+				_ = protocol.WritePacket(conn, resPkt)
+			}
+
+		case protocol.ActionIDPracticeQuickly:
+			// 响应 Mod_MissionPractice_Base 加速完成包
+			req, err := protocol.ParseQuicklyRequest(pkt.Payload)
+			if err == nil {
+				res := protocol.QuicklyResult{
+					Result: protocol.PracticeResultSuccess,
+					Count:  req.Count,
+				}
+				resPkt, _ := protocol.BuildQuicklyResultPacket(res)
 				_ = protocol.WritePacket(conn, resPkt)
 			}
 		}

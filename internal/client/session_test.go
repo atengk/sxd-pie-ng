@@ -396,3 +396,40 @@ func TestRoleSession_SendCompressed_Active(t *testing.T) {
 
 	session.Close()
 }
+
+func TestRoleSession_StLoginWithCredentials(t *testing.T) {
+	cfg := client.SessionConfig{
+		RoleID:        "role-stlogin",
+		RoleName:      "梦一场",
+		ServerAddr:    "mock",
+		ServerID:      "fengwanyx_s813",
+		Time1:         1791469000,
+		Hash1:         "5f4dcc3b5aa765d61d8327deb882cf99",
+		Authenticator: client.DefaultAuthenticator,
+	}
+
+	session := client.NewRoleSession(cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := session.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for session.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if session.State() != client.StateActive {
+		t.Fatalf("expected StateActive, got %s", session.State())
+	}
+
+	// 验证体力同步到了 200 点
+	stamina := session.GetStamina()
+	if stamina != 200 {
+		t.Errorf("expected stamina 200, got %d", stamina)
+	}
+
+	session.Close()
+}

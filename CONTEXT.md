@@ -64,4 +64,13 @@ _避免使用_: Text Matcher, Regex Solver
 当玩法执行捕获到服务器确定性的业务状态（如次数耗尽、体力不足）时，自动将该任务挂起至下一个恢复时间窗口（如次日 00:00 或体力恢复点）的非破坏性降级保护机制。
 _避免使用_: Circuit Breaker, Error Retry, Task Disable
 
+**Ticket Ingress (凭据直注)**:
+从外部配置文件（如 `user.ini`）或自动化换票接口直接加载短期鉴权凭据以建立角色会话的快速接入机制。
+_避免使用_: Bypass Auth, Mock Token, Token Injection
+
+**Safety Probe (安全试探模式)**:
+以最小单次资源消耗（如 5 点体力）验证协议交互与状态同步闭环的防御性自检机制。
+_避免使用_: Dry Run, Mock Test, Test Run
+
+
 

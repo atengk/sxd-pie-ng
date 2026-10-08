@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/dictionary"
@@ -31,6 +32,11 @@ func createTestSession(t *testing.T, initialStamina int) (*client.RoleSession, n
 	sess := client.NewRoleSession(cfg)
 	sess.SetStamina(initialStamina)
 	_ = sess.Start(context.Background())
+
+	deadline := time.Now().Add(2 * time.Second)
+	for sess.State() != client.StateActive && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 
 	return sess, c2
 }

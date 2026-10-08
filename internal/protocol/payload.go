@@ -47,6 +47,15 @@ func (r *Reader) ReadUint8() (uint8, error) {
 	return v, nil
 }
 
+// ReadInt8 读取 1 字节有符号整数。
+func (r *Reader) ReadInt8() (int8, error) {
+	u, err := r.ReadUint8()
+	if err != nil {
+		return 0, err
+	}
+	return int8(u), nil
+}
+
 // ReadUint16 读取 2 字节大端序无符号整数。
 func (r *Reader) ReadUint16() (uint16, error) {
 	if err := r.require(2); err != nil {
@@ -55,6 +64,15 @@ func (r *Reader) ReadUint16() (uint16, error) {
 	v := binary.BigEndian.Uint16(r.buf[r.pos : r.pos+2])
 	r.pos += 2
 	return v, nil
+}
+
+// ReadInt16 读取 2 字节大端序有符号整数。
+func (r *Reader) ReadInt16() (int16, error) {
+	u, err := r.ReadUint16()
+	if err != nil {
+		return 0, err
+	}
+	return int16(u), nil
 }
 
 // ReadUint32 读取 4 字节大端序无符号整数。
@@ -103,6 +121,23 @@ func (r *Reader) ReadString() (string, error) {
 	return str, nil
 }
 
+// ReadString32 读取 4 字节大端序长度前缀的 UTF-8 字符串。
+func (r *Reader) ReadString32() (string, error) {
+	length, err := r.ReadUint32()
+	if err != nil {
+		return "", err
+	}
+	if length == 0 {
+		return "", nil
+	}
+	if err := r.require(int(length)); err != nil {
+		return "", err
+	}
+	str := string(r.buf[r.pos : r.pos+int(length)])
+	r.pos += int(length)
+	return str, nil
+}
+
 // ReadBytes 读取指定长度的裸字节切片。
 func (r *Reader) ReadBytes(n int) ([]byte, error) {
 	if n < 0 {
@@ -136,12 +171,22 @@ func (w *Writer) WriteUint8(v uint8) *Writer {
 	return w
 }
 
+// WriteInt8 写入 1 字节有符号整数。
+func (w *Writer) WriteInt8(v int8) *Writer {
+	return w.WriteUint8(uint8(v))
+}
+
 // WriteUint16 写入 2 字节大端序无符号整数。
 func (w *Writer) WriteUint16(v uint16) *Writer {
 	var b [2]byte
 	binary.BigEndian.PutUint16(b[:], v)
 	w.buf.Write(b[:])
 	return w
+}
+
+// WriteInt16 写入 2 字节大端序有符号整数。
+func (w *Writer) WriteInt16(v int16) *Writer {
+	return w.WriteUint16(uint16(v))
 }
 
 // WriteUint32 写入 4 字节大端序无符号整数。
@@ -169,6 +214,14 @@ func (w *Writer) WriteInt64(v int64) *Writer {
 func (w *Writer) WriteString(s string) *Writer {
 	data := []byte(s)
 	w.WriteUint16(uint16(len(data)))
+	w.buf.Write(data)
+	return w
+}
+
+// WriteString32 写入带有 4 字节大端序长度前缀的 UTF-8 字符串。
+func (w *Writer) WriteString32(s string) *Writer {
+	data := []byte(s)
+	w.WriteUint32(uint32(len(data)))
 	w.buf.Write(data)
 	return w
 }

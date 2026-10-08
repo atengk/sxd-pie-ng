@@ -27,12 +27,16 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 		return nil, err
 	}
 
-	payloadLen := binary.BigEndian.Uint32(headerBuf[0:4])
-	if payloadLen > MaxPayloadSize {
-		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, payloadLen, MaxPayloadSize)
+	bodyLen := binary.BigEndian.Uint32(headerBuf[0:4])
+	if bodyLen < ActionIDSize {
+		return nil, ErrPacketTooShort
+	}
+	if bodyLen > MaxPayloadSize+ActionIDSize {
+		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, bodyLen, MaxPayloadSize+ActionIDSize)
 	}
 
 	actionID := binary.BigEndian.Uint16(headerBuf[4:6])
+	payloadLen := bodyLen - ActionIDSize
 
 	if payloadLen == 0 {
 		return &Packet{

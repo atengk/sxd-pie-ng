@@ -39,6 +39,8 @@ type RoleConfig struct {
 	RoleName   string `yaml:"role_name"`
 	AutoLogin  bool   `yaml:"auto_login"`
 	ServerAddr string `yaml:"server_addr"`
+	Time1      int32  `yaml:"time1"`
+	Hash1      string `yaml:"hash1"`
 }
 
 // SchedulerConfig 任务调度器与防封配置

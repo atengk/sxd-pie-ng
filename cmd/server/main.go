@@ -254,6 +254,9 @@ func run(ctx context.Context, args []string) error {
 				RoleID:               roleID,
 				RoleName:             role.RoleName,
 				ServerAddr:           role.ServerAddr,
+				ServerID:             role.ServerID,
+				Time1:                role.Time1,
+				Hash1:                role.Hash1,
 				Authenticator:        client.DefaultAuthenticator,
 				MaxReconnectAttempts: 3,
 			}

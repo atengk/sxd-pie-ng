@@ -14,6 +14,9 @@ const (
 	// HeaderSize 固定包头长度: [4B Length] + [2B ActionID]
 	HeaderSize = 6
 
+	// ActionIDSize 动作编号字段占用字节数 (2B)
+	ActionIDSize = 2
+
 	// MaxPayloadSize 默认单包载荷最大长度 (16MB)，防御恶意大包导致 OOM
 	MaxPayloadSize = 16 * 1024 * 1024
 )
@@ -26,6 +29,16 @@ var (
 	// ErrPayloadTruncated 数据长度小于包头声明的载荷长度
 	ErrPayloadTruncated = errors.New("protocol: payload data is truncated")
 )
+
+// MakeActionID 计算由 Module 与 Action 组合的大端序 16 位 ActionID: (action << 8) | module。
+func MakeActionID(module uint8, action uint8) uint16 {
+	return (uint16(action) << 8) | uint16(module)
+}
+
+// SplitActionID 拆解 16 位 ActionID 为底层的 Module 模块号与 Action 动作号。
+func SplitActionID(actionID uint16) (module uint8, action uint8) {
+	return uint8(actionID & 0xFF), uint8(actionID >> 8)
+}
 
 // Packet 代表神仙道私有二进制协议数据封包。
 type Packet struct {
@@ -47,15 +60,16 @@ func NewPacket(actionID uint16, payload []byte) *Packet {
 }
 
 // Marshal 将封包按原生二进制线格式序列化为字节切片。
+// 线格式首部 4 字节大端序长度包含 ActionID 的 2 字节与载荷长度。
 func (p *Packet) Marshal() ([]byte, error) {
 	if len(p.Payload) > MaxPayloadSize {
 		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, len(p.Payload), MaxPayloadSize)
 	}
 
-	payloadLen := uint32(len(p.Payload))
-	buf := make([]byte, HeaderSize+payloadLen)
+	bodyLen := uint32(ActionIDSize + len(p.Payload))
+	buf := make([]byte, 4+bodyLen)
 
-	binary.BigEndian.PutUint32(buf[0:4], payloadLen)
+	binary.BigEndian.PutUint32(buf[0:4], bodyLen)
 	binary.BigEndian.PutUint16(buf[4:6], p.ActionID)
 	copy(buf[HeaderSize:], p.Payload)
 
@@ -73,10 +87,10 @@ func (p *Packet) MarshalCompressed() ([]byte, error) {
 		return nil, fmt.Errorf("%w: compressed length %d > %d", ErrPacketTooLarge, len(compressed), MaxPayloadSize)
 	}
 
-	payloadLen := uint32(len(compressed))
-	buf := make([]byte, HeaderSize+payloadLen)
+	bodyLen := uint32(ActionIDSize + len(compressed))
+	buf := make([]byte, 4+bodyLen)
 
-	binary.BigEndian.PutUint32(buf[0:4], payloadLen)
+	binary.BigEndian.PutUint32(buf[0:4], bodyLen)
 	binary.BigEndian.PutUint16(buf[4:6], p.ActionID)
 	copy(buf[HeaderSize:], compressed)
 
@@ -89,11 +103,15 @@ func Unmarshal(data []byte) (*Packet, error) {
 		return nil, ErrPacketTooShort
 	}
 
-	payloadLen := binary.BigEndian.Uint32(data[0:4])
-	if payloadLen > MaxPayloadSize {
-		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, payloadLen, MaxPayloadSize)
+	bodyLen := binary.BigEndian.Uint32(data[0:4])
+	if bodyLen < ActionIDSize {
+		return nil, ErrPacketTooShort
+	}
+	if bodyLen > MaxPayloadSize+ActionIDSize {
+		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, bodyLen, MaxPayloadSize+ActionIDSize)
 	}
 
+	payloadLen := bodyLen - ActionIDSize
 	if uint32(len(data)-HeaderSize) < payloadLen {
 		return nil, ErrPayloadTruncated
 	}
