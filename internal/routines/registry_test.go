@@ -75,7 +75,7 @@ func TestSubdomains_Instances(t *testing.T) {
 		t.Errorf("guild_activities name mismatch: %s", s.Name())
 	}
 
-	dg := dungeon.NewDungeonSweepRoutine()
+	dg := dungeon.NewDungeonSweepRoutine(nil)
 	if dg.Name() != "dungeon_sweep" {
 		t.Errorf("dungeon_sweep name mismatch: %s", dg.Name())
 	}

@@ -36,3 +36,17 @@ type RoleType struct {
 	StuntID int    `json:"stunt_id"`
 	Gender  int    `json:"gender"`
 }
+
+// Mission 代表游戏内的普通与精英副本关卡元数据。
+type Mission struct {
+	ID          int    `json:"id"`
+	SectionID   int    `json:"section_id"`
+	MissionLock int    `json:"mission_lock"`
+	Power       int    `json:"power"`
+	MapID       int    `json:"map_id"`
+	MapKey      int    `json:"map_key"`
+	Name        string `json:"name"`
+	Type        int    `json:"type"` // 0 普通关卡, 1 精英关卡
+	IsBoss      bool   `json:"is_boss"`
+	Monsters    string `json:"monsters"`
+}

@@ -19,6 +19,7 @@ scheduler:
     min_seconds: 1.0
     max_seconds: 3.0
   routines:
+    dungeon_sweep: true
     herb_garden: true
     lucky_star: true
     pilgrimage: true

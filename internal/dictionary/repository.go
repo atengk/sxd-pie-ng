@@ -26,6 +26,8 @@ type Repository interface {
 	GetItem(id int) (*Item, error)
 	GetNPC(id int) (*NPC, error)
 	GetRoleType(id int) (*RoleType, error)
+	GetMission(id int) (*Mission, error)
+	GetHighestMission(sweepElite bool) (*Mission, error)
 	SearchItems(keyword string) ([]*Item, error)
 	Close() error
 }
@@ -190,4 +192,52 @@ func (r *sqliteRepository) SearchItems(keyword string) ([]*Item, error) {
 	}
 
 	return items, nil
+}
+
+func (r *sqliteRepository) GetMission(id int) (*Mission, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	query := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters FROM Missions WHERE MissionsId = ? LIMIT 1`
+	row := r.db.QueryRow(query, id)
+
+	var m Mission
+	var name sql.NullString
+	var monsters sql.NullString
+	var isBoss int
+	err := row.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("dictionary: 查询副本关卡失败: %w", err)
+	}
+	m.Name = strings.TrimSpace(name.String)
+	m.Monsters = monsters.String
+	m.IsBoss = isBoss == 1
+	return &m, nil
+}
+
+func (r *sqliteRepository) GetHighestMission(sweepElite bool) (*Mission, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	query := `SELECT MissionsId, SectionId, MissionLock, MissionPower, map, mapkey, MissionName, MissionType, isBossMission, monsters FROM Missions WHERE (? OR MissionType = 0) ORDER BY MissionsId DESC LIMIT 1`
+	row := r.db.QueryRow(query, sweepElite)
+
+	var m Mission
+	var name sql.NullString
+	var monsters sql.NullString
+	var isBoss int
+	err := row.Scan(&m.ID, &m.SectionID, &m.MissionLock, &m.Power, &m.MapID, &m.MapKey, &name, &m.Type, &isBoss, &monsters)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("dictionary: 查询最高等级副本关卡失败: %w", err)
+	}
+	m.Name = strings.TrimSpace(name.String)
+	m.Monsters = monsters.String
+	m.IsBoss = isBoss == 1
+	return &m, nil
 }

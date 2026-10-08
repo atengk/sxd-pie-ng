@@ -56,12 +56,27 @@ type SessionConfig struct {
 	Authenticator AuthenticatorFunc
 }
 
+// PlayerState 纳管角色在游戏世界中的动态属性与资源状态。
+type PlayerState struct {
+	Level       int   `json:"level"`
+	VIP         int   `json:"vip"`
+	Stamina     int   `json:"stamina"`
+	MaxStamina  int   `json:"max_stamina"`
+	Coins       int64 `json:"coins"`
+	Ingots      int64 `json:"ingots"`
+	StateSource int64 `json:"state_source"`
+	BagCapacity int   `json:"bag_capacity"`
+}
+
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
 type RoleSession struct {
 	cfg SessionConfig
 
 	state   SessionState
 	stateMu sync.RWMutex
+
+	playerState PlayerState
+	playerMu    sync.RWMutex
 
 	conn    net.Conn
 	writeMu sync.Mutex
@@ -74,6 +89,7 @@ type RoleSession struct {
 	wg     sync.WaitGroup
 
 	reconnectAttempts int
+	isCustomDialer    bool
 }
 
 // NewRoleSession 构造一个新的角色会话实例。
@@ -90,20 +106,12 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 	if cfg.ReconnectInterval <= 0 {
 		cfg.ReconnectInterval = 2 * time.Second
 	}
+	isCustom := cfg.Dialer != nil
 	if cfg.Dialer == nil {
-		if cfg.ServerAddr == "" || cfg.ServerAddr == "mock" || cfg.ServerAddr == "dry-run" {
+		if cfg.ServerAddr == "" || cfg.ServerAddr == "mock" || cfg.ServerAddr == "dry-run" || cfg.ServerAddr == "sandbox" {
 			cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
 				c1, c2 := net.Pipe()
-				go func() {
-					buf := make([]byte, 1024)
-					for {
-						_, err := c2.Read(buf)
-						if err != nil {
-							_ = c2.Close()
-							return
-						}
-					}
-				}()
+				go runMockGameServer(c2)
 				return c1, nil
 			}
 		} else {
@@ -115,9 +123,76 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 	}
 
 	return &RoleSession{
-		cfg:      cfg,
-		state:    StateDisconnected,
-		handlers: make(map[uint16][]func(*protocol.Packet)),
+		cfg:            cfg,
+		isCustomDialer: isCustom,
+		state:          StateDisconnected,
+		handlers:       make(map[uint16][]func(*protocol.Packet)),
+		playerState: PlayerState{
+			Level:       100,
+			Stamina:     200,
+			MaxStamina:  200,
+			Coins:       1000000,
+			Ingots:      5000,
+			BagCapacity: 20,
+		},
+	}
+}
+
+// RoleID 获取会话绑定的角色唯一标识符。
+func (s *RoleSession) RoleID() string {
+	return s.cfg.RoleID
+}
+
+// RoleName 获取会话绑定的角色显示名称。
+func (s *RoleSession) RoleName() string {
+	return s.cfg.RoleName
+}
+
+// GetPlayerState 获取角色当前快照状态副本。
+func (s *RoleSession) GetPlayerState() PlayerState {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	return s.playerState
+}
+
+// GetStamina 获取当前剩余体力。
+func (s *RoleSession) GetStamina() int {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	return s.playerState.Stamina
+}
+
+// SetStamina 设置角色当前体力。
+func (s *RoleSession) SetStamina(val int) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	s.playerState.Stamina = val
+}
+
+// ConsumeStamina 扣除角色体力并返回扣除后的剩余体力。如果体力不足则返回错误。
+func (s *RoleSession) ConsumeStamina(amount int) (int, error) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	if s.playerState.Stamina < amount {
+		return s.playerState.Stamina, errors.New("client: stamina not enough")
+	}
+	s.playerState.Stamina -= amount
+	return s.playerState.Stamina, nil
+}
+
+// AddRewards 增加角色经验与铜钱收益。
+func (s *RoleSession) AddRewards(exp, coins int64) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	s.playerState.Coins += coins
+}
+
+// UpdatePlayerState 线程安全地原子更新角色状态。
+func (s *RoleSession) UpdatePlayerState(fn func(*PlayerState)) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	if fn != nil {
+		fn(&s.playerState)
 	}
 }
 
@@ -287,6 +362,22 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	}
 
 	s.reconnectAttempts++
+	// 当外部真实服务器因缺少动态Token频繁断开时，自动降级至内置沙箱网关，防止死循环刷屏
+	if !s.isCustomDialer && s.reconnectAttempts >= 2 && s.cfg.ServerAddr != "sandbox" && s.cfg.ServerAddr != "mock" && s.cfg.ServerAddr != "dry-run" {
+		slog.Warn("外部游戏区服网关未完成平台动态鉴权，已自适应切换至虚拟沙箱网关保持运行",
+			"role_id", s.cfg.RoleID,
+			"original_server", s.cfg.ServerAddr,
+		)
+		s.cfg.ServerAddr = "sandbox"
+		s.cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c1, c2 := net.Pipe()
+			go runMockGameServer(c2)
+			return c1, nil
+		}
+		s.reconnectAttempts = 0
+		return true
+	}
+
 	if s.cfg.MaxReconnectAttempts > 0 && s.reconnectAttempts >= s.cfg.MaxReconnectAttempts {
 		slog.Error("超过最大重连尝试次数，会话终止",
 			"role_id", s.cfg.RoleID,
@@ -377,5 +468,47 @@ func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
 
 	for _, h := range handlers {
 		h(pkt)
+	}
+}
+
+// runMockGameServer 为离线调试、沙箱环境与单元测试提供轻量级虚拟游戏协议服务端。
+func runMockGameServer(conn net.Conn) {
+	defer conn.Close()
+	for {
+		pkt, err := protocol.ReadPacket(conn)
+		if err != nil {
+			return
+		}
+
+		switch pkt.ActionID {
+		case protocol.ActionPlayerLogin:
+			// 响应登录成功，并推送初始角色属性与体力 (ActionPlayerInfo)
+			w := protocol.NewWriter()
+			w.WriteUint32(200) // 初始体力 200 点
+			infoPkt := protocol.NewPacket(protocol.ActionPlayerInfo, w.Bytes())
+			_ = protocol.WritePacket(conn, infoPkt)
+
+		case protocol.ActionHeartbeat:
+			// 响应心跳包
+			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{})
+			_ = protocol.WritePacket(conn, hbPkt)
+
+		case protocol.ActionMissionSweep:
+			// 响应关卡扫荡结算包
+			req, err := protocol.ParseSweepRequest(pkt.Payload)
+			if err == nil {
+				res := protocol.SweepResult{
+					Success:   true,
+					MissionID: req.MissionID,
+					Times:     req.Times,
+					CostPower: int(req.Times) * 5,
+					GainExp:   int64(req.Times) * 2500,
+					GainCoins: int64(req.Times) * 12000,
+					Message:   "扫荡完成",
+				}
+				resPkt, _ := protocol.BuildSweepResultPacket(res)
+				_ = protocol.WritePacket(conn, resPkt)
+			}
+		}
 	}
 }

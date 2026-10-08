@@ -251,9 +251,11 @@ func run(ctx context.Context, args []string) error {
 		for _, role := range acc.Roles {
 			roleID := fmt.Sprintf("%s-%s", role.ServerID, role.RoleName)
 			roleCfg := client.SessionConfig{
-				RoleID:     roleID,
-				RoleName:   role.RoleName,
-				ServerAddr: role.ServerAddr,
+				RoleID:               roleID,
+				RoleName:             role.RoleName,
+				ServerAddr:           role.ServerAddr,
+				Authenticator:        client.DefaultAuthenticator,
+				MaxReconnectAttempts: 3,
 			}
 			sess := client.NewRoleSession(roleCfg)
 			mgr.sessions = append(mgr.sessions, sess)

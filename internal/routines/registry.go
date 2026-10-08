@@ -161,7 +161,7 @@ func (f *RegistryFactory) createRoutine(id string) scheduler.ActivityRoutine {
 
 	// 4. Dungeon
 	case "dungeon_sweep":
-		return dungeon.NewDungeonSweepRoutine()
+		return dungeon.NewDungeonSweepRoutine(f.dictRepo)
 	case "six_realms":
 		return dungeon.NewSixRealmsRoutine()
 	case "demon_tower":

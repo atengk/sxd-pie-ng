@@ -76,4 +76,25 @@ func TestRepository_Queries(t *testing.T) {
 			t.Error("搜索结果中未包含 '气血包'")
 		}
 	})
+
+	t.Run("GetMission", func(t *testing.T) {
+		m, err := repo.GetMission(1)
+		if err != nil {
+			t.Fatalf("获取副本关卡失败: %v", err)
+		}
+		if m == nil || m.Name != "浮月林道(1)" {
+			t.Errorf("期望关卡名称为 '浮月林道(1)', 实际为 %+v", m)
+		}
+		if m.Power != 5 {
+			t.Errorf("期望单次体力消耗为 5, 实际为 %d", m.Power)
+		}
+
+		highest, err := repo.GetHighestMission(false)
+		if err != nil {
+			t.Fatalf("获取最高等级副本失败: %v", err)
+		}
+		if highest == nil || highest.ID <= 0 {
+			t.Fatalf("期望返回有效的最高等级关卡, 实际为 %+v", highest)
+		}
+	})
 }
