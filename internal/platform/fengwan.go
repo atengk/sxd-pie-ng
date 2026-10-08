@@ -60,7 +60,7 @@ func NewFengwanAuthenticator(opts ...FengwanOption) (*FengwanAuthenticator, erro
 			Timeout: 15 * time.Second,
 		},
 		loginURL:   "http://member.fengwanyx.3fangyuan.com/login.php?goback=http://fengwanyx.3fangyuan.com",
-		enterURL:   "http://member.fengwanyx.com/entergame.php",
+		enterURL:   "http://member.fengwanyx.com/game/game.php",
 		defaultTTL: 90 * time.Minute,
 	}
 

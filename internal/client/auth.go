@@ -83,8 +83,12 @@ func DefaultAuthenticator(s *RoleSession) error {
 				switch prop {
 				case protocol.PlayerPropPower:
 					ps.Stamina = int(val)
+				case protocol.PlayerPropMaxPower:
+					ps.MaxStamina = int(val)
 				case protocol.PlayerPropCoins:
 					ps.Coins = int64(val)
+				case protocol.PlayerPropIngot:
+					ps.Ingots = int64(val)
 				case protocol.PlayerPropLevel:
 					ps.Level = int(val)
 				case protocol.PlayerPropVIPLevel:
