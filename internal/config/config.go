@@ -35,9 +35,10 @@ type AccountConfig struct {
 
 // RoleConfig 单个游戏角色配置
 type RoleConfig struct {
-	ServerID  string `yaml:"server_id"`
-	RoleName  string `yaml:"role_name"`
-	AutoLogin bool   `yaml:"auto_login"`
+	ServerID   string `yaml:"server_id"`
+	RoleName   string `yaml:"role_name"`
+	AutoLogin  bool   `yaml:"auto_login"`
+	ServerAddr string `yaml:"server_addr"`
 }
 
 // SchedulerConfig 任务调度器与防封配置

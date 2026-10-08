@@ -139,7 +139,7 @@ func run(ctx context.Context, args []string) error {
 			roleCfg := client.SessionConfig{
 				RoleID:     roleID,
 				RoleName:   role.RoleName,
-				ServerAddr: "127.0.0.1:843", // 默认网关占位
+				ServerAddr: role.ServerAddr,
 			}
 			sess := client.NewRoleSession(roleCfg)
 			mgr.sessions = append(mgr.sessions, sess)
