@@ -39,8 +39,13 @@ type RoleConfig struct {
 	RoleName   string `yaml:"role_name"`
 	AutoLogin  bool   `yaml:"auto_login"`
 	ServerAddr string `yaml:"server_addr"`
-	Time1      int32  `yaml:"time1"`
-	Hash1      string `yaml:"hash1"`
+	// 本服主网关认证凭据 (Mod_Player_Base 0x0000)
+	Code string `yaml:"code"`
+	Time int32  `yaml:"time"`
+	Hash string `yaml:"hash"`
+	// 跨服网关认证凭据 (Mod_StLogin_Base 0x005E)
+	Time1 int32  `yaml:"time1"`
+	Hash1 string `yaml:"hash1"`
 }
 
 // SchedulerConfig 任务调度器与防封配置

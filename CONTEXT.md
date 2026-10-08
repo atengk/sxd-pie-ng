@@ -72,5 +72,13 @@ _避免使用_: Bypass Auth, Mock Token, Token Injection
 以最小单次资源消耗（如 5 点体力）验证协议交互与状态同步闭环的防御性自检机制。
 _避免使用_: Dry Run, Mock Test, Test Run
 
+**Dual-Track Ticket (双轨凭据)**:
+区分游戏本服主网关会话鉴权与跨服玩法业务鉴权的双层复合数字凭据契约。
+_避免使用_: Single Token, Auth Cookie, Login Secret
+
+**Platform Authenticator (平台认证器)**:
+封装针对具体运营平台 Web 协议的自动化身份认证、单点登录与票据换取组件。
+_避免使用_: Web Scraper, Login Bot, Crawler
+
 
 

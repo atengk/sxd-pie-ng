@@ -7,8 +7,27 @@ package client
 import (
 	"log/slog"
 
+	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/protocol"
 )
+
+// ApplyTicket 将双轨平台凭据一键装载至角色会话配置中。
+func ApplyTicket(cfg *SessionConfig, ticket *platform.Ticket) {
+	if cfg == nil || ticket == nil {
+		return
+	}
+	if ticket.Platform != "" {
+		cfg.Platform = ticket.Platform
+	}
+	if ticket.ServerID != "" {
+		cfg.ServerID = ticket.ServerID
+	}
+	cfg.Code = ticket.MainServer.Code
+	cfg.Time = ticket.MainServer.Time
+	cfg.Hash = ticket.MainServer.Hash
+	cfg.Time1 = ticket.CrossServer.Time1
+	cfg.Hash1 = ticket.CrossServer.Hash1
+}
 
 // DefaultAuthenticator 为角色会话提供标准登录认证握手与回包解析调度。
 func DefaultAuthenticator(s *RoleSession) error {
@@ -16,9 +35,10 @@ func DefaultAuthenticator(s *RoleSession) error {
 	var pkt *protocol.Packet
 	var err error
 
-	if s.cfg.ServerID != "" && s.cfg.Time1 != 0 && s.cfg.Hash1 != "" {
+	normalizedServerID := platform.NormalizeServerID(s.cfg.Platform, s.cfg.ServerID)
+	if normalizedServerID != "" && s.cfg.Time1 != 0 && s.cfg.Hash1 != "" {
 		pkt, err = protocol.BuildStLoginPacket(protocol.StLoginRequest{
-			ServerID:   s.cfg.ServerID,
+			ServerID:   normalizedServerID,
 			ClientType: 4,
 			RoleName:   s.RoleName(),
 			Time1:      s.cfg.Time1,

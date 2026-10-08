@@ -40,9 +40,17 @@ type SessionConfig struct {
 
 	// ServerID 游戏区服标识符 (如 "fengwanyx_s813")
 	ServerID string
-	// Time1 动态登录时间戳 (来源于 HTTP 网关 Session Cookie)
+	// Platform 所属运营平台标识 (如 "fengwan")
+	Platform string
+	// Code 游戏授权码
+	Code string
+	// Time 本服登录时间戳 (Mod_Player_Base 0x0000)
+	Time int32
+	// Hash 本服验签散列 (Mod_Player_Base 0x0000)
+	Hash string
+	// Time1 跨服登录时间戳 (Mod_StLogin_Base 0x005E)
 	Time1 int32
-	// Hash1 动态验签散列 (来源于 HTTP 网关 Session Cookie)
+	// Hash1 跨服验签散列 (Mod_StLogin_Base 0x005E)
 	Hash1 string
 
 	// HeartbeatInterval 心跳定时保活间隔 (默认 60s)
