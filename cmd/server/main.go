@@ -154,9 +154,40 @@ func run(ctx context.Context, args []string) error {
 				MinDuration: time.Duration(cfg.Scheduler.Jitter.MinSeconds * float64(time.Second)),
 				MaxDuration: time.Duration(cfg.Scheduler.Jitter.MaxSeconds * float64(time.Second)),
 			}
-			_, _ = dispatcher.AddRole(roleID, sess, jitterCfg)
+			roleSched, _ := dispatcher.AddRole(roleID, sess, jitterCfg)
+
+			if roleSched != nil {
+				if cfg.Scheduler.Routines["herb_garden"] {
+					_ = roleSched.Register(scheduler.NewFuncRoutine(
+						"herb_garden",
+						scheduler.PriorityNormal,
+						15*time.Second,
+						func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+							slog.Info("正在执行日常任务: 药园种植巡检", "role_id", roleID)
+							return nil
+						},
+					))
+				}
+				if cfg.Scheduler.Routines["lucky_star"] {
+					_ = roleSched.Register(scheduler.NewFuncRoutine(
+						"lucky_star",
+						scheduler.PriorityNormal,
+						30*time.Second,
+						func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+							slog.Info("正在执行日常任务: 帮派吉星高照", "role_id", roleID)
+							return nil
+						},
+					))
+				}
+			}
+
+			if role.AutoLogin {
+				_ = sess.Start(ctx)
+			}
 		}
 	}
+
+	dispatcher.StartAll(ctx)
 
 	// 3. 启动 Web 控制台服务
 	webServer := web.NewServer(cfg.Server.Host, cfg.Server.Port, mgr, logBuf, Version)
