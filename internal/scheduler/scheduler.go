@@ -16,10 +16,11 @@ import (
 )
 
 type scheduledItem struct {
-	routine  ActivityRoutine
-	nextRun  time.Time
-	lastRun  time.Time
-	runCount int
+	routine      ActivityRoutine
+	nextRun      time.Time
+	lastRun      time.Time
+	coolingUntil time.Time
+	runCount     int
 }
 
 // RoleScheduler 为特定角色会话提供专属且隔离的任务调度器。
@@ -133,14 +134,50 @@ func (s *RoleScheduler) runLoop() {
 			"priority", item.routine.Priority(),
 		)
 
-		// 执行任务
-		_ = item.routine.Execute(s.ctx, s.session, s.jitter)
+		// 执行任务并捕获业务语义异常
+		execErr := item.routine.Execute(s.ctx, s.session, s.jitter)
 
 		item.lastRun = time.Now()
 		item.runCount++
 
-		// 处理执行周期更新或单次任务移除
 		s.itemsMu.Lock()
+		if execErr != nil {
+			if errors.Is(execErr, ErrAttemptsExhausted) {
+				// 次数耗尽：挂起至次日凌晨 00:00:10
+				tomorrow := time.Now().AddDate(0, 0, 1)
+				midnight := time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 10, 0, tomorrow.Location())
+				item.coolingUntil = midnight
+				slog.Info("日常任务次数耗尽，进入智能熔断挂起",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"cooling_until", midnight,
+				)
+			} else if errors.Is(execErr, ErrStaminaDepleted) {
+				// 体力不足：挂起 30 分钟
+				item.coolingUntil = time.Now().Add(30 * time.Minute)
+				slog.Info("体力耗尽，进入智能熔断挂起",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"cooling_until", item.coolingUntil,
+				)
+			} else if errors.Is(execErr, ErrBagFull) {
+				// 背包已满：挂起 10 分钟
+				item.coolingUntil = time.Now().Add(10 * time.Minute)
+				slog.Warn("背包已满，日常任务休眠待命",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"cooling_until", item.coolingUntil,
+				)
+			} else {
+				slog.Warn("日常任务执行异常",
+					"role_id", s.roleID,
+					"routine", item.routine.Name(),
+					"error", execErr,
+				)
+			}
+		}
+
+		// 处理执行周期更新或单次任务移除
 		if item.routine.Interval() > 0 {
 			item.nextRun = time.Now().Add(item.routine.Interval())
 		} else {
@@ -157,7 +194,11 @@ func (s *RoleScheduler) pickNextReadyItem() *scheduledItem {
 	now := time.Now()
 	var candidates []*scheduledItem
 	for _, it := range s.items {
-		if now.After(it.nextRun) || now.Equal(it.nextRun) {
+		// 校验就绪时间与熔断冷却期
+		isReady := now.After(it.nextRun) || now.Equal(it.nextRun)
+		isCooled := it.coolingUntil.IsZero() || now.After(it.coolingUntil) || now.Equal(it.coolingUntil)
+
+		if isReady && isCooled {
 			candidates = append(candidates, it)
 		}
 	}
@@ -172,6 +213,45 @@ func (s *RoleScheduler) pickNextReadyItem() *scheduledItem {
 	})
 
 	return candidates[0]
+}
+
+// TriggerBatch 唤醒指定调度类型的全部任务（例如定点 Cron 重置），重置其执行时钟与冷却状态。
+func (s *RoleScheduler) TriggerBatch(schedType ScheduleType) int {
+	s.itemsMu.Lock()
+	defer s.itemsMu.Unlock()
+
+	count := 0
+	now := time.Now()
+	for _, it := range s.items {
+		matched := false
+		if det, ok := it.routine.(DetailedRoutine); ok {
+			if det.ScheduleType() == schedType {
+				matched = true
+			}
+		} else if schedType == ScheduleLoop {
+			matched = true
+		}
+
+		if matched {
+			it.nextRun = now
+			it.coolingUntil = time.Time{} // 解除冷却
+			count++
+		}
+	}
+	return count
+}
+
+// GetRoutineState 查询指定任务的执行状态与冷却情况。
+func (s *RoleScheduler) GetRoutineState(name string) (lastRun time.Time, nextRun time.Time, coolingUntil time.Time, found bool) {
+	s.itemsMu.RLock()
+	defer s.itemsMu.RUnlock()
+
+	for _, it := range s.items {
+		if it.routine.Name() == name {
+			return it.lastRun, it.nextRun, it.coolingUntil, true
+		}
+	}
+	return time.Time{}, time.Time{}, time.Time{}, false
 }
 
 func (s *RoleScheduler) removeItemLocked(target *scheduledItem) {

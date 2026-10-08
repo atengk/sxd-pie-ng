@@ -6,6 +6,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -23,7 +24,28 @@ const (
 	PriorityHigh RoutinePriority = 100
 )
 
-// ActivityRoutine 抽象神仙道日常活动任务接口。
+// ScheduleType 标识任务调度触发模式。
+type ScheduleType int
+
+const (
+	// ScheduleLoop 周期常驻巡检任务 (如药园成熟采摘、练功房挂机、体力恢复扫荡)
+	ScheduleLoop ScheduleType = iota
+	// ScheduleCron 定点批处理任务 (如 00:00/06:00 每日重置福利、定时活动)
+	ScheduleCron
+)
+
+var (
+	// ErrAttemptsExhausted 今日可用次数已耗尽，触发智能熔断挂起至次日重置
+	ErrAttemptsExhausted = errors.New("scheduler: daily attempts exhausted")
+	// ErrStaminaDepleted 体力耗尽，触发智能熔断挂起至下次体力恢复时钟
+	ErrStaminaDepleted = errors.New("scheduler: stamina depleted")
+	// ErrBagFull 背包已满，暂停产出类任务执行
+	ErrBagFull = errors.New("scheduler: inventory bag full")
+	// ErrConditionNotMet 前置等级或功能未解锁条件不满足
+	ErrConditionNotMet = errors.New("scheduler: condition not met")
+)
+
+// ActivityRoutine 抽象神仙道日常活动任务基础接口。
 type ActivityRoutine interface {
 	// Name 返回任务唯一名称 (例如 "herb_garden", "lucky_star", "arena", "pilgrimage")
 	Name() string
@@ -33,6 +55,13 @@ type ActivityRoutine interface {
 	Interval() time.Duration
 	// Execute 执行具体业务逻辑，传入角色网络会话与防封抖动引擎
 	Execute(ctx context.Context, session *client.RoleSession, jitter *Jitter) error
+}
+
+// DetailedRoutine 扩展提供领域归属与调度触发类型。
+type DetailedRoutine interface {
+	ActivityRoutine
+	Domain() string
+	ScheduleType() ScheduleType
 }
 
 // FuncRoutine 帮助快速构造基于闭包函数的日常活动任务实例。

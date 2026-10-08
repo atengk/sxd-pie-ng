@@ -256,3 +256,69 @@ func TestScheduler_ErrorBranches(t *testing.T) {
 
 	sched.Stop()
 }
+
+func TestScheduler_SemanticCoolingOff(t *testing.T) {
+	fastJitter := scheduler.NewJitter(scheduler.JitterConfig{
+		MinDuration: 1 * time.Millisecond,
+		MaxDuration: 2 * time.Millisecond,
+	})
+
+	sched := scheduler.NewRoleScheduler("role-cool", nil, fastJitter)
+
+	var runCount atomic.Int32
+	firstRunDone := make(chan struct{})
+
+	// 任务首次运行返回 ErrAttemptsExhausted
+	_ = sched.Register(scheduler.NewFuncRoutine(
+		"exhausted_routine",
+		scheduler.PriorityNormal,
+		10*time.Millisecond,
+		func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
+			c := runCount.Add(1)
+			if c == 1 {
+				close(firstRunDone)
+				return scheduler.ErrAttemptsExhausted
+			}
+			return nil
+		},
+	))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := sched.Start(ctx); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	<-firstRunDone
+
+	// 稍作等待，验证由于进入熔断冷却期，该任务不会继续高频执行
+	time.Sleep(50 * time.Millisecond)
+	if count := runCount.Load(); count != 1 {
+		t.Fatalf("期望任务处于熔断挂起状态且仅执行 1 次，实际执行了 %d 次", count)
+	}
+
+	// 检查任务状态确实处于冷却期
+	_, _, coolingUntil, found := sched.GetRoutineState("exhausted_routine")
+	if !found {
+		t.Fatal("未找到任务状态")
+	}
+	if coolingUntil.Before(time.Now()) {
+		t.Fatalf("期望冷却截止时间在未来，实际为 %v", coolingUntil)
+	}
+
+	// 模拟触发批处理唤醒（如次日重置或手动解除），解除冷却
+	woken := sched.TriggerBatch(scheduler.ScheduleLoop)
+	if woken == 0 {
+		t.Fatal("未唤醒任何任务")
+	}
+
+	// 唤醒后稍作等待，应恢复执行
+	time.Sleep(50 * time.Millisecond)
+	if count := runCount.Load(); count < 2 {
+		t.Fatalf("唤醒后任务应恢复执行，实际执行次数: %d", count)
+	}
+
+	sched.Stop()
+}
+
