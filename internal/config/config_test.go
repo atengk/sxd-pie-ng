@@ -1,0 +1,85 @@
+// Package config_test 验证 YAML 配置加载、环境变量替换与校验机制。
+//
+// @author Ateng
+// @since 2026-10-08
+package config_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"sxd-pie-ng/internal/config"
+)
+
+func TestConfig_LoadExample(t *testing.T) {
+	// 设置测试环境变量
+	_ = os.Setenv("PLATFORM_PASSWORD", "secret123456")
+	defer os.Unsetenv("PLATFORM_PASSWORD")
+
+	examplePath := filepath.Join("..", "..", "configs", "config.example.yaml")
+	cfg, err := config.Load(examplePath)
+	if err != nil {
+		t.Fatalf("Load example config failed: %v", err)
+	}
+
+	if cfg.Server.Port != 8080 {
+		t.Errorf("expected port 8080, got %d", cfg.Server.Port)
+	}
+	if cfg.Server.Host != "127.0.0.1" {
+		t.Errorf("expected host 127.0.0.1, got %s", cfg.Server.Host)
+	}
+
+	if len(cfg.Accounts) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(cfg.Accounts))
+	}
+	acc := cfg.Accounts[0]
+	if acc.Platform != "xindong" {
+		t.Errorf("expected platform xindong, got %s", acc.Platform)
+	}
+	if acc.Password != "secret123456" {
+		t.Errorf("expected password to be expanded from env, got %s", acc.Password)
+	}
+	if len(acc.Roles) != 1 {
+		t.Fatalf("expected 1 role, got %d", len(acc.Roles))
+	}
+
+	if cfg.Scheduler.Jitter.MinSeconds != 1.0 || cfg.Scheduler.Jitter.MaxSeconds != 3.0 {
+		t.Errorf("unexpected jitter bounds: %v - %v", cfg.Scheduler.Jitter.MinSeconds, cfg.Scheduler.Jitter.MaxSeconds)
+	}
+	if !cfg.Scheduler.Routines["herb_garden"] {
+		t.Errorf("expected herb_garden to be enabled")
+	}
+}
+
+func TestConfig_ValidationDefaults(t *testing.T) {
+	// 测试默认值补齐
+	minimalYaml := `
+server:
+  port: 9090
+`
+	tmpFile := filepath.Join(t.TempDir(), "test_config.yaml")
+	if err := os.WriteFile(tmpFile, []byte(minimalYaml), 0644); err != nil {
+		t.Fatalf("write tmpFile failed: %v", err)
+	}
+
+	cfg, err := config.Load(tmpFile)
+	if err != nil {
+		t.Fatalf("Load minimal config failed: %v", err)
+	}
+
+	if cfg.Server.Host != "127.0.0.1" {
+		t.Errorf("expected default host 127.0.0.1, got %s", cfg.Server.Host)
+	}
+	if cfg.Scheduler.Jitter.MinSeconds != 1.0 || cfg.Scheduler.Jitter.MaxSeconds != 3.0 {
+		t.Errorf("expected default jitter [1.0, 3.0], got [%v, %v]",
+			cfg.Scheduler.Jitter.MinSeconds, cfg.Scheduler.Jitter.MaxSeconds)
+	}
+}
+
+func TestConfig_InvalidFile(t *testing.T) {
+	_, err := config.Load("non_existent_file.yaml")
+	if err == nil {
+		t.Error("expected error for non-existent file")
+	}
+}

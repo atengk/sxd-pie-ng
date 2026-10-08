@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>神仙道助手 (sxd-pie-ng) - 控制台</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 24px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    h1 { font-size: 1.5rem; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge-success { background: rgba(16, 185, 129, 0.2); color: var(--success); }
+    .badge-warn { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
+    .badge-danger { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    @media (min-width: 900px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+    }
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-muted); font-weight: 600; }
+    .log-box {
+      background: #090d16;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      height: 300px;
+      overflow-y: auto;
+    }
+    .log-entry { margin-bottom: 4px; display: flex; gap: 8px; }
+    .log-time { color: var(--text-muted); }
+    .log-level-INFO { color: #60a5fa; }
+    .log-level-WARN { color: var(--warning); }
+    .log-level-ERROR { color: var(--danger); }
+    .btn {
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>神仙道助手 (sxd-pie-ng) <span class="badge badge-success" id="sys-status">ONLINE</span></h1>
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Next-Gen Go Implementation · 脱机协议 · 拟人抖动调度</p>
+    </div>
+    <div>
+      <button class="btn" onclick="fetchData()">刷新数据</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">
+        <span>🎮 角色会话列表</span>
+        <span style="font-size: 0.8rem; color: var(--text-muted);" id="role-count">共 0 个角色</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>角色名</th>
+            <th>区服</th>
+            <th>会话状态</th>
+          </tr>
+        </thead>
+        <tbody id="roles-tbody">
+          <tr><td colspan="3" style="text-align: center; color: var(--text-muted);">暂无角色会话</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <span>📋 日常活动任务</span>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">防封抖动 [1~3s]</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>玩法模块</th>
+            <th>状态</th>
+            <th>优先级</th>
+          </tr>
+        </thead>
+        <tbody id="routines-tbody">
+          <tr><td>药园种植 (herb_garden)</td><td><span class="badge badge-success">运行中</span></td><td>普通 (50)</td></tr>
+          <tr><td>吉星高照 (lucky_star)</td><td><span class="badge badge-success">运行中</span></td><td>普通 (50)</td></tr>
+          <tr><td>取经护送 (pilgrimage)</td><td><span class="badge badge-success">运行中</span></td><td>普通 (50)</td></tr>
+          <tr><td>竞技场挑战 (arena)</td><td><span class="badge badge-success">运行中</span></td><td>高 (100)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top: 20px;">
+    <div class="card-title">
+      <span>📜 实时系统日志</span>
+      <span style="font-size: 0.8rem; color: var(--text-muted);">最近 100 条流水</span>
+    </div>
+    <div class="log-box" id="log-box">
+      <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-level-INFO">[INFO]</span><span>控制台初始化就绪，等待日志数据...</span></div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchData() {
+      try {
+        const [rolesRes, logsRes] = await Promise.all([
+          fetch('/api/roles'),
+          fetch('/api/logs')
+        ]);
+        if (rolesRes.ok) {
+          const roles = await rolesRes.json();
+          renderRoles(roles);
+        }
+        if (logsRes.ok) {
+          const logs = await logsRes.json();
+          renderLogs(logs);
+        }
+      } catch (e) {
+        console.error("加载数据异常", e);
+      }
+    }
+
+    function renderRoles(roles) {
+      const tbody = document.getElementById('roles-tbody');
+      document.getElementById('role-count').innerText = `共 ${roles.length} 个角色`;
+      if (!roles || roles.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted);">暂无角色会话</td></tr>';
+        return;
+      }
+      tbody.innerHTML = roles.map(r => `
+        <tr>
+          <td><strong>${r.role_name}</strong></td>
+          <td>${r.server_id}</td>
+          <td><span class="badge ${r.state === 'Active' ? 'badge-success' : (r.state === 'Closed' ? 'badge-danger' : 'badge-warn')}">${r.state}</span></td>
+        </tr>
+      `).join('');
+    }
+
+    function renderLogs(logs) {
+      const box = document.getElementById('log-box');
+      if (!logs || logs.length === 0) return;
+      box.innerHTML = logs.map(l => `
+        <div class="log-entry">
+          <span class="log-time">${l.time}</span>
+          <span class="log-level-${l.level}">[${l.level}]</span>
+          <span>${l.message}</span>
+        </div>
+      `).join('');
+      box.scrollTop = box.scrollHeight;
+    }
+
+    fetchData();
+    setInterval(fetchData, 2000);
+  </script>
+</body>
+</html>
