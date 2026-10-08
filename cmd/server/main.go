@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"strings"
 	"syscall"
 	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
 	"sxd-pie-ng/internal/dictionary"
+	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/qa"
 	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/scheduler"
@@ -247,25 +249,65 @@ func run(ctx context.Context, args []string) error {
 	mgr := &sessionManager{}
 	dispatcher := scheduler.NewDispatcher()
 
+	ticketCache := platform.NewTicketCache(90 * time.Minute)
+	if fwAuth, err := platform.NewFengwanAuthenticator(); err == nil {
+		ticketCache.RegisterAuthenticator(fwAuth)
+	}
+
 	for _, acc := range cfg.Accounts {
 		for _, role := range acc.Roles {
 			roleID := fmt.Sprintf("%s-%s", role.ServerID, role.RoleName)
+
+			// 网关地址解析 (Gateway Resolution): 若为 sandbox 或默认，自动解析已知真实网关
+			serverAddr := role.ServerAddr
+			if serverAddr == "" || serverAddr == "sandbox" {
+				if strings.Contains(role.ServerID, "813") {
+					serverAddr = "49.232.196.100:8381"
+				}
+			}
+
 			roleCfg := client.SessionConfig{
 				RoleID:               roleID,
 				RoleName:             role.RoleName,
-				ServerAddr:           role.ServerAddr,
+				ServerAddr:           serverAddr,
 				ServerID:             role.ServerID,
+				Platform:             acc.Platform,
+				Code:                 role.Code,
+				Time:                 role.Time,
+				Hash:                 role.Hash,
 				Time1:                role.Time1,
 				Hash1:                role.Hash1,
 				Authenticator:        client.DefaultAuthenticator,
 				MaxReconnectAttempts: 3,
 			}
+
+			// 全自治凭据流水线 (Autonomous Ingress):
+			// 优先通过账号密码全自动发起原生 Web 登录换取双轨凭据 (0外部依赖)
+			if acc.Platform != "" && acc.Username != "" && acc.Password != "" {
+				slog.Info("正在通过全自治 Web 驱动自动换取平台最新凭据...", "platform", acc.Platform, "username", acc.Username, "server", role.ServerID)
+				ticket, err := ticketCache.GetOrFetch(ctx, acc.Platform, acc.Username, acc.Password, role.ServerID)
+				if err != nil {
+					slog.Warn("原生平台换票未成功，尝试备用降级通道", "error", err)
+				} else {
+					client.ApplyTicket(&roleCfg, ticket)
+					slog.Info("已成功全自动换取最新双轨凭据并直注会话", "server_id", roleCfg.ServerID, "role_name", role.RoleName)
+				}
+			}
+
+			// 备用降级通道: 若仍未就绪，尝试从外部 user.ini 摄取
+			if roleCfg.Time1 == 0 || roleCfg.Hash1 == "" {
+				if ticket, err := platform.LoadTicketFromIni("", role.RoleName); err == nil {
+					client.ApplyTicket(&roleCfg, ticket)
+					slog.Info("已通过备用 Ticket Ingress 成功摄取本地凭据", "role_name", role.RoleName, "server_id", roleCfg.ServerID)
+				}
+			}
+
 			sess := client.NewRoleSession(roleCfg)
 			mgr.sessions = append(mgr.sessions, sess)
 			mgr.roles = append(mgr.roles, web.RoleInfo{
 				RoleID:   roleID,
 				RoleName: role.RoleName,
-				ServerID: role.ServerID,
+				ServerID: roleCfg.ServerID,
 				State:    sess.State().String(),
 			})
 

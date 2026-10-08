@@ -80,5 +80,23 @@ _避免使用_: Single Token, Auth Cookie, Login Secret
 封装针对具体运营平台 Web 协议的自动化身份认证、单点登录与票据换取组件。
 _避免使用_: Web Scraper, Login Bot, Crawler
 
+**Multi-Gateway Topology (多网关拓扑)**:
+区分主服主长连接与跨服业务（仙界、圣域）长连接的分层网络拓扑，主服主干长连优先，跨服按需惰性建立。
+_避免使用_: Multiple Sockets, Connection Multiplex
+
+**Gateway Resolution (网关地址解析)**:
+结合已知平台区服静态字典映射与用户自定义配置覆盖的真实 TCP Socket 目标寻址策略。
+_避免使用_: IP Resolver, Server Routing
+
+**Autonomous Ingress (全自治凭据流水线)**:
+纯 Go 语言在内存中执行多阶段平台 Web 认证、跨域重定向与 Cookie 嗅探，彻底脱离外部执行档与文件的自治接入管道。
+_避免使用_: Third-Party Bot, External Ingress
+
+**Self-Healing Session (自愈会话状态机)**:
+在网络 EOF 闪断或服务端凭证过期时，由状态机自动触发原生换票、地址重解析与无缝重连的长连接韧性架构。
+_避免使用_: Auto Reconnect, Simple Retry
+
+
+
 
 
