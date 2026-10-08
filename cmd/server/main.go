@@ -17,6 +17,9 @@ import (
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
+	"sxd-pie-ng/internal/dictionary"
+	"sxd-pie-ng/internal/qa"
+	"sxd-pie-ng/internal/routines"
 	"sxd-pie-ng/internal/scheduler"
 	"sxd-pie-ng/internal/web"
 )
@@ -29,6 +32,82 @@ var (
 	// Date 编译期注入的构建日期
 	Date = "unknown"
 )
+
+type routineManager struct {
+	mu         sync.RWMutex
+	enabledMap map[string]bool
+	schedulers []*scheduler.RoleScheduler
+}
+
+func (rm *routineManager) ListRoutines() []web.RoutineStatus {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	defs := routines.GetAllDefinitions()
+	res := make([]web.RoutineStatus, len(defs))
+	for i, d := range defs {
+		enabled, ok := rm.enabledMap[d.ID]
+		if !ok {
+			enabled = d.DefaultOn
+		}
+
+		state := "Disabled"
+		coolingUntilStr := ""
+		if enabled {
+			state = "Active"
+			for _, s := range rm.schedulers {
+				if _, _, coolingUntil, found := s.GetRoutineState(d.ID); found {
+					if coolingUntil.After(time.Now()) {
+						state = "Cooling"
+						coolingUntilStr = coolingUntil.Format("15:04:05")
+						break
+					}
+				}
+			}
+		}
+
+		res[i] = web.RoutineStatus{
+			ID:           d.ID,
+			Name:         d.Name,
+			Domain:       d.Domain,
+			Schedule:     d.Schedule.String(),
+			Description:  d.Description,
+			Enabled:      enabled,
+			State:        state,
+			CoolingUntil: coolingUntilStr,
+		}
+	}
+	return res
+}
+
+func (rm *routineManager) ToggleRoutine(id string, enabled bool) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.enabledMap[id] = enabled
+	return nil
+}
+
+func (rm *routineManager) ApplyPreset(preset string) error {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	defs := routines.GetAllDefinitions()
+	switch preset {
+	case "all":
+		for _, d := range defs {
+			rm.enabledMap[d.ID] = true
+		}
+	case "none":
+		for _, d := range defs {
+			rm.enabledMap[d.ID] = false
+		}
+	case "recommended":
+		for _, d := range defs {
+			rm.enabledMap[d.ID] = d.DefaultOn
+		}
+	}
+	return nil
+}
 
 type multiHandler struct {
 	handlers []slog.Handler
@@ -129,7 +208,30 @@ func run(ctx context.Context, args []string) error {
 		return fmt.Errorf("加载配置失败: %w", err)
 	}
 
-	// 2. 初始化角色会话与多角色调度器
+	// 2. 初始化数据字典仓储与智能题库问答引擎
+	dictRepo, err := dictionary.NewRepository("")
+	if err != nil {
+		slog.Warn("未检测到本地游戏数据字典，部分元数据查询将降级", "error", err)
+	} else {
+		slog.Info("已成功挂载老版游戏数据字典 Pieb.db")
+	}
+
+	qaEngine, err := qa.NewEngine("")
+	if err != nil {
+		slog.Warn("未检测到本地问答题库，仙履答题将以默认模式运行", "error", err)
+	} else {
+		slog.Info("已成功加载智能题库问答引擎", "total_questions", qaEngine.Size())
+	}
+
+	factory := routines.NewRegistryFactory(qaEngine, dictRepo)
+	routineMgr := &routineManager{
+		enabledMap: make(map[string]bool),
+	}
+	for k, v := range cfg.Scheduler.Routines {
+		routineMgr.enabledMap[k] = v
+	}
+
+	// 3. 初始化角色会话与多角色调度器
 	mgr := &sessionManager{}
 	dispatcher := scheduler.NewDispatcher()
 
@@ -157,28 +259,10 @@ func run(ctx context.Context, args []string) error {
 			roleSched, _ := dispatcher.AddRole(roleID, sess, jitterCfg)
 
 			if roleSched != nil {
-				if cfg.Scheduler.Routines["herb_garden"] {
-					_ = roleSched.Register(scheduler.NewFuncRoutine(
-						"herb_garden",
-						scheduler.PriorityNormal,
-						15*time.Second,
-						func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
-							slog.Info("正在执行日常任务: 药园种植巡检", "role_id", roleID)
-							return nil
-						},
-					))
-				}
-				if cfg.Scheduler.Routines["lucky_star"] {
-					_ = roleSched.Register(scheduler.NewFuncRoutine(
-						"lucky_star",
-						scheduler.PriorityNormal,
-						30*time.Second,
-						func(ctx context.Context, s *client.RoleSession, j *scheduler.Jitter) error {
-							slog.Info("正在执行日常任务: 帮派吉星高照", "role_id", roleID)
-							return nil
-						},
-					))
-				}
+				// 装配全量 30+ 玩法
+				regCount := factory.RegisterAll(roleSched, routineMgr.enabledMap)
+				slog.Info("已为角色装配自动化玩法矩阵", "role_id", roleID, "registered_count", regCount)
+				routineMgr.schedulers = append(routineMgr.schedulers, roleSched)
 			}
 
 			if role.AutoLogin {
@@ -189,8 +273,9 @@ func run(ctx context.Context, args []string) error {
 
 	dispatcher.StartAll(ctx)
 
-	// 3. 启动 Web 控制台服务
+	// 4. 启动 Web 控制台服务并注入玩法管理提供器
 	webServer := web.NewServer(cfg.Server.Host, cfg.Server.Port, mgr, logBuf, Version)
+	webServer.SetRoutineProvider(routineMgr)
 	if err := webServer.Start(ctx); err != nil {
 		return fmt.Errorf("启动 Web 控制台失败: %w", err)
 	}

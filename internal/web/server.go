@@ -34,13 +34,33 @@ type RoleProvider interface {
 	ListRoles() []RoleInfo
 }
 
+// RoutineStatus 玩法运行与配置状态
+type RoutineStatus struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Domain       string `json:"domain"`
+	Schedule     string `json:"schedule"`
+	Description  string `json:"description"`
+	Enabled      bool   `json:"enabled"`
+	State        string `json:"state"` // "Active", "Cooling", "Disabled"
+	CoolingUntil string `json:"cooling_until,omitempty"`
+}
+
+// RoutineProvider 玩法管理器接口
+type RoutineProvider interface {
+	ListRoutines() []RoutineStatus
+	ToggleRoutine(id string, enabled bool) error
+	ApplyPreset(preset string) error
+}
+
 // Server Web 控制台与管理 API 服务
 type Server struct {
-	host         string
-	port         int
-	roleProvider RoleProvider
-	logBuffer    *LogBuffer
-	version      string
+	host            string
+	port            int
+	roleProvider    RoleProvider
+	routineProvider RoutineProvider
+	logBuffer       *LogBuffer
+	version         string
 
 	server   *http.Server
 	listener net.Listener
@@ -82,6 +102,13 @@ func (s *Server) Addr() string {
 	return s.addr
 }
 
+// SetRoutineProvider 动态注入玩法管理器。
+func (s *Server) SetRoutineProvider(p RoutineProvider) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.routineProvider = p
+}
+
 // Start 启动 Web 控制台 HTTP 监听。
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
@@ -97,6 +124,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/roles", s.handleRoles)
 	mux.HandleFunc("/api/logs", s.handleLogs)
+	mux.HandleFunc("/api/routines", s.handleRoutines)
 
 	listenAddr := fmt.Sprintf("%s:%d", s.host, s.port)
 	ln, err := net.Listen("tcp", listenAddr)
@@ -162,8 +190,54 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, logs)
 }
 
+func (s *Server) handleRoutines(w http.ResponseWriter, r *http.Request) {
+	if s.routineProvider == nil {
+		writeJSON(w, http.StatusOK, []RoutineStatus{})
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		routines := s.routineProvider.ListRoutines()
+		if routines == nil {
+			routines = []RoutineStatus{}
+		}
+		writeJSON(w, http.StatusOK, routines)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			ID      string `json:"id"`
+			Enabled *bool  `json:"enabled"`
+			Preset  string `json:"preset"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json payload"})
+			return
+		}
+
+		if req.Preset != "" {
+			if err := s.routineProvider.ApplyPreset(req.Preset); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+		} else if req.ID != "" && req.Enabled != nil {
+			if err := s.routineProvider.ToggleRoutine(req.ID, *req.Enabled); err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
+	w.WriteHeader(http.StatusMethodNotAllowed)
+}
+
 func writeJSON(w http.ResponseWriter, code int, data any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(data)
 }
+

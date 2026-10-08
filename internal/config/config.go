@@ -43,8 +43,11 @@ type RoleConfig struct {
 
 // SchedulerConfig 任务调度器与防封配置
 type SchedulerConfig struct {
-	Jitter   JitterConfig    `yaml:"jitter"`
-	Routines map[string]bool `yaml:"routines"`
+	Jitter    JitterConfig           `yaml:"jitter"`
+	Preset    string                 `yaml:"preset"`
+	CronTimes []string               `yaml:"cron_times"`
+	Routines  map[string]bool        `yaml:"routines"`
+	Expert    map[string]interface{} `yaml:"expert"`
 }
 
 // JitterConfig 抖动上下限配置 (秒)
@@ -107,6 +110,20 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Scheduler.Routines == nil {
 		cfg.Scheduler.Routines = make(map[string]bool)
+	}
+
+	if cfg.Scheduler.Preset == "" {
+		cfg.Scheduler.Preset = "recommended"
+	}
+
+	if len(cfg.Scheduler.CronTimes) == 0 {
+		cfg.Scheduler.CronTimes = []string{
+			"00:00", "06:02", "08:02", "12:00", "16:05", "18:01", "20:01", "22:01",
+		}
+	}
+
+	if cfg.Scheduler.Expert == nil {
+		cfg.Scheduler.Expert = make(map[string]interface{})
 	}
 
 	if cfg.Accounts == nil {

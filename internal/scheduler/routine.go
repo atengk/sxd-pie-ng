@@ -34,6 +34,17 @@ const (
 	ScheduleCron
 )
 
+func (s ScheduleType) String() string {
+	switch s {
+	case ScheduleLoop:
+		return "Loop"
+	case ScheduleCron:
+		return "Cron"
+	default:
+		return "Unknown"
+	}
+}
+
 var (
 	// ErrAttemptsExhausted 今日可用次数已耗尽，触发智能熔断挂起至次日重置
 	ErrAttemptsExhausted = errors.New("scheduler: daily attempts exhausted")

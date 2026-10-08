@@ -15,6 +15,7 @@
       --success: #10b981;
       --warning: #f59e0b;
       --danger: #ef4444;
+      --indigo: #6366f1;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -43,9 +44,10 @@
     .badge-success { background: rgba(16, 185, 129, 0.2); color: var(--success); }
     .badge-warn { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
     .badge-danger { background: rgba(239, 68, 68, 0.2); color: var(--danger); }
+    .badge-info { background: rgba(59, 130, 246, 0.2); color: var(--primary); }
     .grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
-    @media (min-width: 900px) {
-      .grid { grid-template-columns: 1fr 1fr; }
+    @media (min-width: 1000px) {
+      .grid { grid-template-columns: 1fr 1.3fr; }
     }
     .card {
       background: var(--card-bg);
@@ -71,7 +73,7 @@
       padding: 12px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 0.8rem;
-      height: 300px;
+      height: 320px;
       overflow-y: auto;
     }
     .log-entry { margin-bottom: 4px; display: flex; gap: 8px; }
@@ -88,87 +90,159 @@
       cursor: pointer;
       font-size: 0.85rem;
     }
+    .btn-secondary { background: #334155; }
+    .btn-success { background: #059669; }
     .btn:hover { opacity: 0.9; }
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .filter-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 4px 10px;
+      border-radius: 20px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    .filter-btn.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+    .routine-list {
+      max-height: 480px;
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .routine-item {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .routine-meta { display: flex; flex-direction: column; gap: 2px; }
+    .routine-name { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+    .routine-desc { font-size: 0.75rem; color: var(--text-muted); }
+    .toggle {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #475569; transition: .3s; border-radius: 22px;
+    }
+    .slider:before {
+      position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px;
+      background-color: white; transition: .3s; border-radius: 50%;
+    }
+    input:checked + .slider { background-color: var(--success); }
+    input:checked + .slider:before { transform: translateX(18px); }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>神仙道助手 (sxd-pie-ng) <span class="badge badge-success" id="sys-status">ONLINE</span></h1>
-      <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">Next-Gen Go Implementation · 脱机协议 · 拟人抖动调度</p>
+      <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;">全量 30+ 自动化矩阵 · 双轨复合调度 · 语义智能熔断</p>
     </div>
-    <div>
-      <button class="btn" onclick="fetchData()">刷新数据</button>
+    <div style="display: flex; gap: 8px;">
+      <button class="btn btn-secondary" onclick="fetchData()">刷新</button>
     </div>
   </header>
 
   <div class="grid">
-    <div class="card">
-      <div class="card-title">
-        <span>🎮 角色会话列表</span>
-        <span style="font-size: 0.8rem; color: var(--text-muted);" id="role-count">共 0 个角色</span>
+    <div>
+      <!-- 角色面板 -->
+      <div class="card">
+        <div class="card-title">
+          <span>🎮 角色会话列表</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted);" id="role-count">共 0 个角色</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>角色名</th>
+              <th>区服</th>
+              <th>会话状态</th>
+            </tr>
+          </thead>
+          <tbody id="roles-tbody">
+            <tr><td colspan="3" style="text-align: center; color: var(--text-muted);">暂无角色会话</td></tr>
+          </tbody>
+        </table>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>角色名</th>
-            <th>区服</th>
-            <th>会话状态</th>
-          </tr>
-        </thead>
-        <tbody id="roles-tbody">
-          <tr><td colspan="3" style="text-align: center; color: var(--text-muted);">暂无角色会话</td></tr>
-        </tbody>
-      </table>
+
+      <!-- 实时日志面板 -->
+      <div class="card" style="margin-top: 20px;">
+        <div class="card-title">
+          <span>📜 实时系统日志</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted);">动态环形缓冲</span>
+        </div>
+        <div class="log-box" id="log-box">
+          <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-level-INFO">[INFO]</span><span>控制台初始化就绪，等待日志数据...</span></div>
+        </div>
+      </div>
     </div>
 
+    <!-- 玩法矩阵管理面板 -->
     <div class="card">
       <div class="card-title">
-        <span>📋 日常活动任务</span>
-        <span style="font-size: 0.8rem; color: var(--text-muted);">防封抖动 [1~3s]</span>
+        <span>⚡ 自动化玩法矩阵 (30+ 玩法)</span>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-success" onclick="applyPreset('recommended')">一键减负预设</button>
+          <button class="btn btn-secondary" onclick="applyPreset('all')">全开</button>
+          <button class="btn btn-secondary" onclick="applyPreset('none')">全关</button>
+        </div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>玩法模块</th>
-            <th>状态</th>
-            <th>优先级</th>
-          </tr>
-        </thead>
-        <tbody id="routines-tbody">
-          <tr><td>药园种植 (herb_garden)</td><td><span class="badge badge-success">运行中</span></td><td>普通 (50)</td></tr>
-          <tr><td>吉星高照 (lucky_star)</td><td><span class="badge badge-success">运行中</span></td><td>普通 (50)</td></tr>
-          <tr><td>取经护送 (pilgrimage)</td><td><span class="badge badge-success">运行中</span></td><td>普通 (50)</td></tr>
-          <tr><td>竞技场挑战 (arena)</td><td><span class="badge badge-success">运行中</span></td><td>高 (100)</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
 
-  <div class="card" style="margin-top: 20px;">
-    <div class="card-title">
-      <span>📜 实时系统日志</span>
-      <span style="font-size: 0.8rem; color: var(--text-muted);">最近 100 条流水</span>
-    </div>
-    <div class="log-box" id="log-box">
-      <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-level-INFO">[INFO]</span><span>控制台初始化就绪，等待日志数据...</span></div>
+      <div class="filter-bar" id="domain-filters">
+        <button class="filter-btn active" onclick="filterDomain('all')">全部</button>
+        <button class="filter-btn" onclick="filterDomain('daily')">每日日常</button>
+        <button class="filter-btn" onclick="filterDomain('farming')">农场资源</button>
+        <button class="filter-btn" onclick="filterDomain('social')">仙盟社交</button>
+        <button class="filter-btn" onclick="filterDomain('dungeon')">副本推图</button>
+        <button class="filter-btn" onclick="filterDomain('pvp')">竞技对抗</button>
+        <button class="filter-btn" onclick="filterDomain('minigame')">益智问答</button>
+      </div>
+
+      <div class="routine-list" id="routine-list">
+        <div style="text-align: center; color: var(--text-muted); padding: 20px;">正在加载玩法矩阵...</div>
+      </div>
     </div>
   </div>
 
   <script>
+    let allRoutines = [];
+    let currentDomain = 'all';
+
     async function fetchData() {
       try {
-        const [rolesRes, logsRes] = await Promise.all([
+        const [rolesRes, logsRes, routinesRes] = await Promise.all([
           fetch('/api/roles'),
-          fetch('/api/logs')
+          fetch('/api/logs'),
+          fetch('/api/routines')
         ]);
         if (rolesRes.ok) {
-          const roles = await rolesRes.json();
-          renderRoles(roles);
+          renderRoles(await rolesRes.json());
         }
         if (logsRes.ok) {
-          const logs = await logsRes.json();
-          renderLogs(logs);
+          renderLogs(await logsRes.json());
+        }
+        if (routinesRes.ok) {
+          allRoutines = await routinesRes.json();
+          renderRoutines();
         }
       } catch (e) {
         console.error("加载数据异常", e);
@@ -202,6 +276,75 @@
         </div>
       `).join('');
       box.scrollTop = box.scrollHeight;
+    }
+
+    function filterDomain(domain) {
+      currentDomain = domain;
+      document.querySelectorAll('#domain-filters .filter-btn').forEach(b => {
+        b.classList.remove('active');
+        if (b.innerText.toLowerCase().includes(domain) || (domain === 'all' && b.innerText === '全部')) {
+          b.classList.add('active');
+        }
+      });
+      renderRoutines();
+    }
+
+    function renderRoutines() {
+      const container = document.getElementById('routine-list');
+      if (!allRoutines || allRoutines.length === 0) {
+        container.innerHTML = '<div style="text-align: center; color: var(--text-muted); padding: 20px;">暂无玩法配置</div>';
+        return;
+      }
+
+      const filtered = currentDomain === 'all' 
+        ? allRoutines 
+        : allRoutines.filter(r => r.domain === currentDomain);
+
+      container.innerHTML = filtered.map(r => `
+        <div class="routine-item">
+          <div class="routine-meta">
+            <div class="routine-name">
+              <span>${r.name}</span>
+              <span class="badge ${r.state === 'Cooling' ? 'badge-warn' : (r.enabled ? 'badge-success' : 'badge-danger')}">
+                ${r.state === 'Cooling' ? '熔断休眠中' : (r.enabled ? '运行中' : '已停用')}
+              </span>
+            </div>
+            <div class="routine-desc">${r.description || r.id}</div>
+          </div>
+          <div>
+            <label class="toggle">
+              <input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRoutine('${r.id}', this.checked)">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function toggleRoutine(id, enabled) {
+      try {
+        await fetch('/api/routines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, enabled })
+        });
+        fetchData();
+      } catch (e) {
+        console.error("切换状态异常", e);
+      }
+    }
+
+    async function applyPreset(preset) {
+      try {
+        await fetch('/api/routines', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preset })
+        });
+        fetchData();
+      } catch (e) {
+        console.error("应用预设异常", e);
+      }
     }
 
     fetchData();
