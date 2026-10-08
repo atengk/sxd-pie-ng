@@ -1,0 +1,25 @@
+# 神仙道助手 (sxd-pie-ng) 示例配置文件
+# 详见 docs/ 了解具体配置项说明
+
+server:
+  port: 8080
+  host: "127.0.0.1"
+
+accounts:
+  - platform: "xindong"
+    username: "YOUR_PLATFORM_USERNAME"
+    password: "${PLATFORM_PASSWORD}"
+    roles:
+      - server_id: "s1"
+        role_name: "YOUR_ROLE_NAME"
+        auto_login: true
+
+scheduler:
+  jitter:
+    min_seconds: 1.0
+    max_seconds: 3.0
+  routines:
+    herb_garden: true
+    lucky_star: true
+    pilgrimage: true
+    arena: true
