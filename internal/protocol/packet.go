@@ -1,0 +1,114 @@
+// Package protocol 提供神仙道客户端与服务器之间的二进制协议序列化、反序列化、大端序编解码与透明 zlib 流解压缩引擎。
+//
+// @author Ateng
+// @since 2026-10-08
+package protocol
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+)
+
+const (
+	// HeaderSize 固定包头长度: [4B Length] + [2B ActionID]
+	HeaderSize = 6
+
+	// MaxPayloadSize 默认单包载荷最大长度 (16MB)，防御恶意大包导致 OOM
+	MaxPayloadSize = 16 * 1024 * 1024
+)
+
+var (
+	// ErrPacketTooShort 数据长度不足最小包头大小
+	ErrPacketTooShort = errors.New("protocol: packet data is shorter than header size")
+	// ErrPacketTooLarge 数据长度超出单包允许上限
+	ErrPacketTooLarge = errors.New("protocol: packet payload exceeds maximum allowed size")
+	// ErrPayloadTruncated 数据长度小于包头声明的载荷长度
+	ErrPayloadTruncated = errors.New("protocol: payload data is truncated")
+)
+
+// Packet 代表神仙道私有二进制协议数据封包。
+type Packet struct {
+	// ActionID 业务动作指令编号 (大端序 uint16)
+	ActionID uint16
+	// Payload 封包承载的应用层数据载荷 (已透明解压)
+	Payload []byte
+}
+
+// NewPacket 创建一个初始化好的 Packet 实例。
+func NewPacket(actionID uint16, payload []byte) *Packet {
+	if payload == nil {
+		payload = []byte{}
+	}
+	return &Packet{
+		ActionID: actionID,
+		Payload:  payload,
+	}
+}
+
+// Marshal 将封包按原生二进制线格式序列化为字节切片。
+func (p *Packet) Marshal() ([]byte, error) {
+	if len(p.Payload) > MaxPayloadSize {
+		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, len(p.Payload), MaxPayloadSize)
+	}
+
+	payloadLen := uint32(len(p.Payload))
+	buf := make([]byte, HeaderSize+payloadLen)
+
+	binary.BigEndian.PutUint32(buf[0:4], payloadLen)
+	binary.BigEndian.PutUint16(buf[4:6], p.ActionID)
+	copy(buf[HeaderSize:], p.Payload)
+
+	return buf, nil
+}
+
+// MarshalCompressed 将封包载荷执行 zlib 压缩后序列化为字节切片。
+func (p *Packet) MarshalCompressed() ([]byte, error) {
+	compressed, err := Compress(p.Payload)
+	if err != nil {
+		return nil, fmt.Errorf("protocol: failed to compress payload: %w", err)
+	}
+
+	if len(compressed) > MaxPayloadSize {
+		return nil, fmt.Errorf("%w: compressed length %d > %d", ErrPacketTooLarge, len(compressed), MaxPayloadSize)
+	}
+
+	payloadLen := uint32(len(compressed))
+	buf := make([]byte, HeaderSize+payloadLen)
+
+	binary.BigEndian.PutUint32(buf[0:4], payloadLen)
+	binary.BigEndian.PutUint16(buf[4:6], p.ActionID)
+	copy(buf[HeaderSize:], compressed)
+
+	return buf, nil
+}
+
+// Unmarshal 解析原生线格式数据为 Packet 结构，自动完成基础校验与透明解压缩。
+func Unmarshal(data []byte) (*Packet, error) {
+	if len(data) < HeaderSize {
+		return nil, ErrPacketTooShort
+	}
+
+	payloadLen := binary.BigEndian.Uint32(data[0:4])
+	if payloadLen > MaxPayloadSize {
+		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, payloadLen, MaxPayloadSize)
+	}
+
+	if uint32(len(data)-HeaderSize) < payloadLen {
+		return nil, ErrPayloadTruncated
+	}
+
+	actionID := binary.BigEndian.Uint16(data[4:6])
+	rawPayload := data[HeaderSize : HeaderSize+payloadLen]
+
+	// 透明处理 zlib 压缩嗅探与自愈
+	payload, err := DecompressIfNeeded(rawPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Packet{
+		ActionID: actionID,
+		Payload:  payload,
+	}, nil
+}
