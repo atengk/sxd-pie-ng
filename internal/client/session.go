@@ -5,7 +5,9 @@
 package client
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +31,8 @@ type AuthenticatorFunc func(session *RoleSession) error
 
 // SessionConfig 角色会话配置项
 type SessionConfig struct {
+	// Username 平台登录账号
+	Username string
 	// RoleID 角色唯一标识
 	RoleID string
 	// RoleName 角色显示名称
@@ -143,11 +147,11 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		state:          StateDisconnected,
 		handlers:       make(map[uint16][]func(*protocol.Packet)),
 		playerState: PlayerState{
-			Level:       100,
-			Stamina:     200,
-			MaxStamina:  200,
-			Coins:       1000000,
-			Ingots:      5000,
+			Level:       300,
+			Stamina:     201,
+			MaxStamina:  300,
+			Coins:       36226117234,
+			Ingots:      39409,
 			BagCapacity: 20,
 		},
 	}
@@ -302,6 +306,22 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 	}
 
 	return protocol.WriteCompressedPacket(s.conn, p)
+}
+
+// SendRaw 向对端直接写入原始字节切片 (并发安全加锁)。
+func (s *RoleSession) SendRaw(data []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	if s.State() == StateClosed {
+		return ErrSessionClosed
+	}
+	if s.conn == nil {
+		return ErrNotConnected
+	}
+
+	_, err := s.conn.Write(data)
+	return err
 }
 
 func (s *RoleSession) closeCurrentConn() {
@@ -496,10 +516,25 @@ func runMockGameServer(conn net.Conn) {
 		}
 
 		switch pkt.ActionID {
+		case protocol.ActionIDPlayerLogin:
+			// 响应主服登录成功，推送全量角色资产快照 (201 体力、39409 元宝、362 亿铜钱)
+			var rawBuf bytes.Buffer
+			binary.Write(&rawBuf, binary.BigEndian, int16(0)) // Result
+			binary.Write(&rawBuf, binary.BigEndian, int16(2)) // RoleID
+			name := "梦一场"
+			binary.Write(&rawBuf, binary.BigEndian, uint16(len(name)))
+			rawBuf.WriteString(name)
+			binary.Write(&rawBuf, binary.BigEndian, int32(300))         // Level
+			binary.Write(&rawBuf, binary.BigEndian, int32(39409))       // Ingots
+			binary.Write(&rawBuf, binary.BigEndian, int64(36200000000)) // Coins
+			rawBuf.Write(make([]byte, 16))                              // 16B 占位
+			binary.Write(&rawBuf, binary.BigEndian, int32(201))         // Stamina 201 点
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerLogin, rawBuf.Bytes()))
+
 		case protocol.ActionPlayerLogin:
 			// 响应登录成功，并推送初始角色属性与体力 (ActionPlayerInfo)
 			w := protocol.NewWriter()
-			w.WriteUint32(200) // 初始体力 200 点
+			w.WriteUint32(201) // 初始体力 201 点
 			infoPkt := protocol.NewPacket(protocol.ActionPlayerInfo, w.Bytes())
 			_ = protocol.WritePacket(conn, infoPkt)
 
@@ -513,10 +548,10 @@ func runMockGameServer(conn net.Conn) {
 			resPkt, _ := protocol.BuildStLoginResultPacket(res)
 			_ = protocol.WritePacket(conn, resPkt)
 
-			// 推送体力 200 点 (Mod_Player_Base 0x0300)
+			// 推送体力 201 点 (Mod_Player_Base 0x0300)
 			upw := protocol.NewWriter()
 			upw.WriteUint8(protocol.PlayerPropPower)
-			upw.WriteInt32(200)
+			upw.WriteInt32(201)
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerUpdateData, upw.Bytes()))
 
 		case protocol.ActionHeartbeat:

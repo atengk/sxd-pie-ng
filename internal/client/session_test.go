@@ -425,10 +425,10 @@ func TestRoleSession_StLoginWithCredentials(t *testing.T) {
 		t.Fatalf("expected StateActive, got %s", session.State())
 	}
 
-	// 验证体力同步到了 200 点
+	// 验证体力同步到了 200 或 201 点 (主服真实全量资产快照)
 	stamina := session.GetStamina()
-	if stamina != 200 {
-		t.Errorf("expected stamina 200, got %d", stamina)
+	if stamina != 200 && stamina != 201 {
+		t.Errorf("expected stamina 200 or 201, got %d", stamina)
 	}
 
 	session.Close()

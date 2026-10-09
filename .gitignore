@@ -31,6 +31,9 @@ Thumbs.db
 logs/
 *.pid
 *.seed
+*.pcap
+*.pcapng
+*.etl
 .env
 .env.*
 !.env.example

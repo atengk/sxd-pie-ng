@@ -35,23 +35,36 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, bodyLen, MaxPayloadSize+ActionIDSize)
 	}
 
-	actionID := binary.BigEndian.Uint16(headerBuf[4:6])
 	payloadLen := bodyLen - ActionIDSize
+	rawPayload := make([]byte, payloadLen)
+	if payloadLen > 0 {
+		_, err = io.ReadFull(r, rawPayload)
+		if err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+				return nil, ErrPayloadTruncated
+			}
+			return nil, err
+		}
+	}
 
+	// 1. 尝试整包压缩自愈嗅探 (神仙道整包压缩格式: [4B len] + [zlib 流包含 ActionID 与载荷])
+	fullBody := append(headerBuf[4:6], rawPayload...)
+	if decompressed, ok := DecompressWholePacketIfNeeded(fullBody); ok {
+		actionID := binary.BigEndian.Uint16(decompressed[0:2])
+		payload := decompressed[2:]
+		return &Packet{
+			ActionID: actionID,
+			Payload:  payload,
+		}, nil
+	}
+
+	// 2. 标准载荷压缩或未压缩
+	actionID := binary.BigEndian.Uint16(headerBuf[4:6])
 	if payloadLen == 0 {
 		return &Packet{
 			ActionID: actionID,
 			Payload:  []byte{},
 		}, nil
-	}
-
-	rawPayload := make([]byte, payloadLen)
-	_, err = io.ReadFull(r, rawPayload)
-	if err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
-			return nil, ErrPayloadTruncated
-		}
-		return nil, err
 	}
 
 	payload, err := DecompressIfNeeded(rawPayload)

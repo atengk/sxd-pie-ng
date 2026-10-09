@@ -65,3 +65,22 @@ func DecompressIfNeeded(src []byte) ([]byte, error) {
 
 	return decompressed, nil
 }
+
+// DecompressWholePacketIfNeeded 检查 body 数据是否首字节为 0x78 (整包压缩)。
+// 若是并且成功解压，返回解压后的完整字节切片与 true；否则返回 nil 与 false。
+func DecompressWholePacketIfNeeded(body []byte) ([]byte, bool) {
+	if len(body) < 2 || body[0] != ZlibMagicByte {
+		return nil, false
+	}
+	r, err := zlib.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, false
+	}
+	defer r.Close()
+
+	decompressed, err := io.ReadAll(r)
+	if err != nil || len(decompressed) < 2 {
+		return nil, false
+	}
+	return decompressed, true
+}

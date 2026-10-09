@@ -116,6 +116,18 @@ func Unmarshal(data []byte) (*Packet, error) {
 		return nil, ErrPayloadTruncated
 	}
 
+	fullBody := data[4 : 4+bodyLen]
+	// 1. 尝试整包压缩自愈嗅探 (神仙道整包压缩格式: [4B len] + [zlib 流包含 ActionID 与载荷])
+	if decompressed, ok := DecompressWholePacketIfNeeded(fullBody); ok {
+		actionID := binary.BigEndian.Uint16(decompressed[0:2])
+		payload := decompressed[2:]
+		return &Packet{
+			ActionID: actionID,
+			Payload:  payload,
+		}, nil
+	}
+
+	// 2. 标准格式与载荷级压缩
 	actionID := binary.BigEndian.Uint16(data[4:6])
 	rawPayload := data[HeaderSize : HeaderSize+payloadLen]
 
