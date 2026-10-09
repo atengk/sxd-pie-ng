@@ -47,11 +47,14 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 		}
 	}
 
-	// 1. 尝试整包压缩自愈嗅探 (神仙道整包压缩格式: [4B len] + [zlib 流包含 ActionID 与载荷])
-	fullBody := append(headerBuf[4:6], rawPayload...)
+	// 1. 尝试整包压缩自愈嗅探 (神仙道整包压缩格式: [4B len] + [zlib 流包含 4B ActionID 与载荷])
+	fullBody := append(headerBuf[4:8], rawPayload...)
 	if decompressed, ok := DecompressWholePacketIfNeeded(fullBody); ok {
-		actionID := binary.BigEndian.Uint16(decompressed[0:2])
-		payload := decompressed[2:]
+		if len(decompressed) < ActionIDSize {
+			return nil, ErrPacketTooShort
+		}
+		actionID := binary.BigEndian.Uint32(decompressed[0:4])
+		payload := decompressed[4:]
 		return &Packet{
 			ActionID: actionID,
 			Payload:  payload,
@@ -59,7 +62,7 @@ func ReadPacket(r io.Reader) (*Packet, error) {
 	}
 
 	// 2. 标准载荷压缩或未压缩
-	actionID := binary.BigEndian.Uint16(headerBuf[4:6])
+	actionID := binary.BigEndian.Uint32(headerBuf[4:8])
 	if payloadLen == 0 {
 		return &Packet{
 			ActionID: actionID,

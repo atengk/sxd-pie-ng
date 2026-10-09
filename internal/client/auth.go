@@ -50,28 +50,59 @@ func DefaultAuthenticator(s *RoleSession) error {
 		})
 	}
 
-	// 1. 注册主服 0x0000 核心角色资产包与初始化触发序列
+	// 1. 注册主服 0x0000 核心角色登录包与初始化触发序列
 	s.RegisterHandler(protocol.ActionIDPlayerLogin, func(p *protocol.Packet) {
 		res, err := protocol.ParsePlayerLoginResult(p.Payload)
 		if err == nil && res.RoleName != "" {
 			s.UpdatePlayerState(func(ps *PlayerState) {
 				ps.Stamina = int(res.Stamina)
+				ps.ExtraStamina = int(res.ExtraStamina)
 				ps.MaxStamina = int(res.MaxStamina)
 				ps.Coins = res.Coins
 				ps.Ingots = int64(res.Ingots)
 				ps.Level = int(res.Level)
+				ps.VIP = int(res.VIP)
 			})
-			slog.Info("主服全量角色资产同步成功",
+			slog.Info("主服登录握手成功",
 				"role_id", s.RoleID(),
 				"role_name", res.RoleName,
 				"level", res.Level,
 				"stamina", res.Stamina,
+				"extra_stamina", res.ExtraStamina,
 				"max_stamina", res.MaxStamina,
 				"ingots", res.Ingots,
 				"coins", res.Coins,
 			)
 
 			sendInitPackets()
+		} else {
+			// 即使响应为空包，亦继续初始化通道
+			sendInitPackets()
+		}
+	})
+
+	// 注册主服 0x0002 角色全量属性与体力同步包
+	s.RegisterHandler(protocol.ActionIDPlayerGetInfo, func(p *protocol.Packet) {
+		res, err := protocol.ParsePlayerLoginResult(p.Payload)
+		if err == nil && res.RoleName != "" {
+			s.UpdatePlayerState(func(ps *PlayerState) {
+				ps.Stamina = int(res.Stamina)
+				ps.ExtraStamina = int(res.ExtraStamina)
+				ps.MaxStamina = int(res.MaxStamina)
+				ps.Coins = res.Coins
+				ps.Ingots = int64(res.Ingots)
+				ps.Level = int(res.Level)
+				ps.VIP = int(res.VIP)
+			})
+			slog.Info("主服全量角色资产同步成功",
+				"role_id", s.RoleID(),
+				"role_name", res.RoleName,
+				"level", res.Level,
+				"stamina", res.Stamina,
+				"extra_stamina", res.ExtraStamina,
+				"coins", res.Coins,
+				"ingots", res.Ingots,
+			)
 		}
 	})
 
@@ -96,7 +127,7 @@ func DefaultAuthenticator(s *RoleSession) error {
 		}
 	})
 
-	// 注册 Mod_Player_Base 0x0300 动态更新通知
+	// 注册 Mod_Player_Base 0x00000003 动态更新通知
 	s.RegisterHandler(protocol.ActionIDPlayerUpdateData, func(p *protocol.Packet) {
 		r := protocol.NewReader(p.Payload)
 		for r.Remaining() >= 5 {
@@ -112,6 +143,8 @@ func DefaultAuthenticator(s *RoleSession) error {
 				switch prop {
 				case protocol.PlayerPropPower:
 					ps.Stamina = int(val)
+				case protocol.PlayerPropExtraPower:
+					ps.ExtraStamina = int(val)
 				case protocol.PlayerPropMaxPower:
 					ps.MaxStamina = int(val)
 				case protocol.PlayerPropCoins:

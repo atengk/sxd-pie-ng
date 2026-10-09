@@ -10,16 +10,16 @@ import (
 )
 
 const (
-	// ActionHeartbeat 心跳保活协议号
-	ActionHeartbeat uint16 = 0x0001
+	// ActionHeartbeat 心跳保活协议号 (Module 0, Action 23 -> 0x00000017)
+	ActionHeartbeat uint32 = 0x00000017
 	// ActionPlayerLogin 角色登录握手认证协议号
-	ActionPlayerLogin uint16 = 0x0002
+	ActionPlayerLogin uint32 = 0x00000000
 	// ActionPlayerInfo 角色属性与体力同步协议号
-	ActionPlayerInfo uint16 = 0x0003
+	ActionPlayerInfo uint32 = 0x00000002
 	// ActionEnterTown 进入城镇协议号
-	ActionEnterTown uint16 = 0x0004
+	ActionEnterTown uint32 = 0x00010000
 	// ActionMissionSweep 关卡副本扫荡请求与响应协议号
-	ActionMissionSweep uint16 = 0x000B
+	ActionMissionSweep uint32 = 0x00190001
 )
 
 var (

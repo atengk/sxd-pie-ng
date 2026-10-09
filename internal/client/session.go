@@ -61,8 +61,8 @@ type SessionConfig struct {
 	HeartbeatInterval time.Duration
 	// HeartbeatTimeout 心跳超时时间 (默认 15s)
 	HeartbeatTimeout time.Duration
-	// HeartbeatActionID 心跳消息号 (默认 0x0001)
-	HeartbeatActionID uint16
+	// HeartbeatActionID 心跳消息号 (默认 0x00000017)
+	HeartbeatActionID uint32
 
 	// ReconnectInterval 重连回退重试时间间隔 (默认 2s)
 	ReconnectInterval time.Duration
@@ -81,6 +81,7 @@ type PlayerState struct {
 	VIP         int   `json:"vip"`
 	Stamina     int   `json:"stamina"`
 	MaxStamina  int   `json:"max_stamina"`
+	ExtraStamina int  `json:"extra_stamina"`
 	Coins       int64 `json:"coins"`
 	Ingots      int64 `json:"ingots"`
 	StateSource int64 `json:"state_source"`
@@ -100,7 +101,7 @@ type RoleSession struct {
 	conn    net.Conn
 	writeMu sync.Mutex
 
-	handlers  map[uint16][]func(*protocol.Packet)
+	handlers  map[uint32][]func(*protocol.Packet)
 	handlerMu sync.RWMutex
 
 	ctx    context.Context
@@ -120,7 +121,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg.HeartbeatTimeout = 15 * time.Second
 	}
 	if cfg.HeartbeatActionID == 0 {
-		cfg.HeartbeatActionID = 0x0001
+		cfg.HeartbeatActionID = protocol.ActionHeartbeat
 	}
 	if cfg.ReconnectInterval <= 0 {
 		cfg.ReconnectInterval = 2 * time.Second
@@ -145,7 +146,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg:            cfg,
 		isCustomDialer: isCustom,
 		state:          StateDisconnected,
-		handlers:       make(map[uint16][]func(*protocol.Packet)),
+		handlers:       make(map[uint32][]func(*protocol.Packet)),
 		playerState: PlayerState{
 			Level:       300,
 			Stamina:     201,
@@ -174,29 +175,58 @@ func (s *RoleSession) GetPlayerState() PlayerState {
 	return s.playerState
 }
 
-// GetStamina 获取当前剩余体力。
+// GetStamina 获取当前总剩余体力 (基础体力 + 存储/额外体力)。
 func (s *RoleSession) GetStamina() int {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	return s.playerState.Stamina + s.playerState.ExtraStamina
+}
+
+// GetBaseStamina 获取基础体力池数值 (基准上限 300)。
+func (s *RoleSession) GetBaseStamina() int {
 	s.playerMu.RLock()
 	defer s.playerMu.RUnlock()
 	return s.playerState.Stamina
 }
 
-// SetStamina 设置角色当前体力。
+// GetExtraStamina 获取存储/额外体力池数值。
+func (s *RoleSession) GetExtraStamina() int {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	return s.playerState.ExtraStamina
+}
+
+// SetStamina 设置角色当前基础体力。
 func (s *RoleSession) SetStamina(val int) {
 	s.playerMu.Lock()
 	defer s.playerMu.Unlock()
 	s.playerState.Stamina = val
 }
 
-// ConsumeStamina 扣除角色体力并返回扣除后的剩余体力。如果体力不足则返回错误。
+// SetExtraStamina 设置角色当前存储/额外体力。
+func (s *RoleSession) SetExtraStamina(val int) {
+	s.playerMu.Lock()
+	defer s.playerMu.Unlock()
+	s.playerState.ExtraStamina = val
+}
+
+// ConsumeStamina 扣除角色体力并返回扣除后的总剩余体力。
+// 服务端扫荡遵循优先扣除存储/额外体力池，耗尽后再扣除基础体力池的业务机制。
 func (s *RoleSession) ConsumeStamina(amount int) (int, error) {
 	s.playerMu.Lock()
 	defer s.playerMu.Unlock()
-	if s.playerState.Stamina < amount {
-		return s.playerState.Stamina, errors.New("client: stamina not enough")
+	total := s.playerState.Stamina + s.playerState.ExtraStamina
+	if total < amount {
+		return total, errors.New("client: stamina not enough")
 	}
-	s.playerState.Stamina -= amount
-	return s.playerState.Stamina, nil
+	if s.playerState.ExtraStamina >= amount {
+		s.playerState.ExtraStamina -= amount
+	} else {
+		rem := amount - s.playerState.ExtraStamina
+		s.playerState.ExtraStamina = 0
+		s.playerState.Stamina -= rem
+	}
+	return s.playerState.Stamina + s.playerState.ExtraStamina, nil
 }
 
 // AddRewards 增加角色经验与铜钱收益。
@@ -236,9 +266,12 @@ func (s *RoleSession) setState(newState SessionState) {
 }
 
 // RegisterHandler 注册特定 Action ID 的消息处理器回调。
-func (s *RoleSession) RegisterHandler(actionID uint16, handler func(*protocol.Packet)) {
+func (s *RoleSession) RegisterHandler(actionID uint32, handler func(*protocol.Packet)) {
 	s.handlerMu.Lock()
 	defer s.handlerMu.Unlock()
+	if s.handlers == nil {
+		s.handlers = make(map[uint32][]func(*protocol.Packet))
+	}
 	s.handlers[actionID] = append(s.handlers[actionID], handler)
 }
 
@@ -531,13 +564,6 @@ func runMockGameServer(conn net.Conn) {
 			binary.Write(&rawBuf, binary.BigEndian, int32(201))         // Stamina 201 点
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerLogin, rawBuf.Bytes()))
 
-		case protocol.ActionPlayerLogin:
-			// 响应登录成功，并推送初始角色属性与体力 (ActionPlayerInfo)
-			w := protocol.NewWriter()
-			w.WriteUint32(201) // 初始体力 201 点
-			infoPkt := protocol.NewPacket(protocol.ActionPlayerInfo, w.Bytes())
-			_ = protocol.WritePacket(conn, infoPkt)
-
 		case protocol.ActionIDStLogin:
 			// 响应跨服登录成功，并推送 0x0300 初始体力
 			res := protocol.StLoginResult{
@@ -559,33 +585,27 @@ func runMockGameServer(conn net.Conn) {
 			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{})
 			_ = protocol.WritePacket(conn, hbPkt)
 
-		case protocol.ActionMissionSweep:
-			// 响应关卡扫荡结算包
-			req, err := protocol.ParseSweepRequest(pkt.Payload)
-			if err == nil {
-				res := protocol.SweepResult{
-					Success:   true,
-					MissionID: req.MissionID,
-					Times:     req.Times,
-					CostPower: int(req.Times) * 5,
-					GainExp:   int64(req.Times) * 2500,
-					GainCoins: int64(req.Times) * 12000,
-					Message:   "扫荡完成",
-				}
-				resPkt, _ := protocol.BuildSweepResultPacket(res)
-				_ = protocol.WritePacket(conn, resPkt)
-			}
-
 		case protocol.ActionIDPracticeStart:
-			// 响应 Mod_MissionPractice_Base 开始扫荡包
-			req, err := protocol.ParseStartPracticeRequest(pkt.Payload)
-			if err == nil {
+			// 响应关卡扫荡请求 (兼容 StartPracticeRequest 与 SweepRequest)
+			if req, err := protocol.ParseStartPracticeRequest(pkt.Payload); err == nil {
 				res := protocol.StartPracticeResult{
 					Result:    protocol.PracticeResultSuccess,
 					MissionID: req.MissionID,
 					Count:     req.Count,
 				}
 				resPkt, _ := protocol.BuildStartPracticeResultPacket(res)
+				_ = protocol.WritePacket(conn, resPkt)
+			} else if sReq, err := protocol.ParseSweepRequest(pkt.Payload); err == nil {
+				res := protocol.SweepResult{
+					Success:   true,
+					MissionID: sReq.MissionID,
+					Times:     sReq.Times,
+					CostPower: int(sReq.Times) * 5,
+					GainExp:   int64(sReq.Times) * 2500,
+					GainCoins: int64(sReq.Times) * 12000,
+					Message:   "扫荡完成",
+				}
+				resPkt, _ := protocol.BuildSweepResultPacket(res)
 				_ = protocol.WritePacket(conn, resPkt)
 			}
 

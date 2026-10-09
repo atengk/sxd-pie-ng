@@ -39,8 +39,8 @@ func TestSessionState_String(t *testing.T) {
 func TestRoleSession_ConnectAndAuthenticate(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 
-	const actionLogin uint16 = 100
-	const actionChat uint16 = 200
+	const actionLogin uint32 = 100
+	const actionChat uint32 = 200
 
 	var serverWg sync.WaitGroup
 	serverWg.Add(1)
@@ -152,7 +152,7 @@ func TestRoleSession_ConnectAndAuthenticate(t *testing.T) {
 func TestRoleSession_Heartbeat(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 
-	const actionHeartbeat uint16 = 0x0001
+	const actionHeartbeat uint32 = 0x00000017
 	heartbeatCount := 0
 	var countMu sync.Mutex
 
@@ -217,7 +217,7 @@ func TestRoleSession_AutomaticReconnect(t *testing.T) {
 	pipe1Client, pipe1Server := net.Pipe()
 	pipe2Client, pipe2Server := net.Pipe()
 
-	const actionLogin uint16 = 100
+	const actionLogin uint32 = 100
 	dialCount := 0
 	var dialMu sync.Mutex
 
@@ -348,7 +348,7 @@ func TestRoleSession_SendErrors(t *testing.T) {
 
 func TestRoleSession_SendCompressed_Active(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
-	const actionCompressed uint16 = 888
+	const actionCompressed uint32 = 888
 
 	received := make(chan *protocol.Packet, 1)
 	go func() {

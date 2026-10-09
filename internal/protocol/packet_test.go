@@ -13,7 +13,7 @@ import (
 )
 
 func TestPacket_MarshalUnmarshal_Raw(t *testing.T) {
-	actionID := uint16(1001)
+	actionID := uint32(1001)
 	payload := []byte("hello sxd-pie-ng")
 
 	pkt := protocol.NewPacket(actionID, payload)
@@ -22,11 +22,11 @@ func TestPacket_MarshalUnmarshal_Raw(t *testing.T) {
 		t.Fatalf("Marshal failed: %v", err)
 	}
 
-	// 验证 6 字节固定包头: [4B Length] + [2B ActionID]
-	// 真实协议中 4 字节长度包含 ActionIDSize(2) + 载荷长度
+	// 验证 8 字节固定包头: [4B Length] + [4B ActionID]
+	// 真实协议中 4 字节长度包含 ActionIDSize(4) + 载荷长度
 	expectedLength := uint32(protocol.ActionIDSize + len(payload))
 	actualLength := binary.BigEndian.Uint32(wire[0:4])
-	actualActionID := binary.BigEndian.Uint16(wire[4:6])
+	actualActionID := binary.BigEndian.Uint32(wire[4:8])
 
 	if actualLength != expectedLength {
 		t.Errorf("expected length %d, got %d", expectedLength, actualLength)
@@ -34,8 +34,8 @@ func TestPacket_MarshalUnmarshal_Raw(t *testing.T) {
 	if actualActionID != actionID {
 		t.Errorf("expected action id %d, got %d", actionID, actualActionID)
 	}
-	if !bytes.Equal(wire[6:], payload) {
-		t.Errorf("expected payload %s, got %s", payload, wire[6:])
+	if !bytes.Equal(wire[8:], payload) {
+		t.Errorf("expected payload %s, got %s", payload, wire[8:])
 	}
 
 	// 验证反序列化
@@ -80,20 +80,20 @@ func TestPacket_EmptyPayload(t *testing.T) {
 }
 
 func TestPacket_ActionID_Coding(t *testing.T) {
-	// Module 94 (0x5E), Action 0 -> 0x005E
+	// Module 94 (0x5E), Action 0 -> 0x005E0000
 	aidStLogin := protocol.MakeActionID(94, 0)
-	if aidStLogin != 0x005E {
-		t.Errorf("expected 0x005E, got 0x%04X", aidStLogin)
+	if aidStLogin != 0x005E0000 {
+		t.Errorf("expected 0x005E0000, got 0x%08X", aidStLogin)
 	}
 	mod, act := protocol.SplitActionID(aidStLogin)
 	if mod != 94 || act != 0 {
 		t.Errorf("expected mod 94 act 0, got mod %d act %d", mod, act)
 	}
 
-	// Module 25 (0x19), Action 1 -> 0x0119
+	// Module 25 (0x19), Action 1 -> 0x00190001
 	aidSweep := protocol.MakeActionID(25, 1)
-	if aidSweep != 0x0119 {
-		t.Errorf("expected 0x0119, got 0x%04X", aidSweep)
+	if aidSweep != 0x00190001 {
+		t.Errorf("expected 0x00190001, got 0x%08X", aidSweep)
 	}
 	mod, act = protocol.SplitActionID(aidSweep)
 	if mod != 25 || act != 1 {
@@ -102,11 +102,12 @@ func TestPacket_ActionID_Coding(t *testing.T) {
 }
 
 func TestPacket_LiveServerPacketHex(t *testing.T) {
-	// 实测真实游戏服务器返回的 Mod_StLogin 响应报文:
-	// 0000000d 005e 000001000000006ac7a72e
+	// 实测真实游戏服务器返回的 8 字节包头报文:
+	// Length = 15 (4 ActionID + 11 Payload)
+	// ActionID = 0x005E0000
 	rawHex := []byte{
-		0x00, 0x00, 0x00, 0x0D, // Length = 13 (2 ActionID + 11 Payload)
-		0x00, 0x5E,             // ActionID = 0x005E
+		0x00, 0x00, 0x00, 0x0F, // Length = 15 (4 ActionID + 11 Payload)
+		0x00, 0x5E, 0x00, 0x00, // ActionID = 0x005E0000
 		0x00,                   // result = 0 (SUCCESS)
 		0x00, 0x01, 0x00, 0x00, // player_id = 65536
 		0x00, 0x00, 0x6a, 0xc7, 0xa7, 0x2e, // timestamp
@@ -116,8 +117,8 @@ func TestPacket_LiveServerPacketHex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unmarshal live server packet failed: %v", err)
 	}
-	if pkt.ActionID != 0x005E {
-		t.Errorf("expected ActionID 0x005E, got 0x%04X", pkt.ActionID)
+	if pkt.ActionID != 0x005E0000 {
+		t.Errorf("expected ActionID 0x005E0000, got 0x%08X", pkt.ActionID)
 	}
 	if len(pkt.Payload) != 11 {
 		t.Fatalf("expected payload length 11, got %d", len(pkt.Payload))

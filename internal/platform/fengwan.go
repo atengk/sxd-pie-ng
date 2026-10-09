@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -144,7 +145,9 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 	if err != nil && !errors.Is(err, http.ErrUseLastResponse) {
 		return nil, fmt.Errorf("fengwan: enter game request failed: %w", err)
 	}
-	defer enterResp.Body.Close()
+	enterBodyBytes, _ := io.ReadAll(enterResp.Body)
+	_ = enterResp.Body.Close()
+	enterBodyStr := string(enterBodyBytes)
 
 	if redirectLocation == "" {
 		redirectLocation = enterResp.Header.Get("Location")
@@ -194,6 +197,77 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		crossTicket.Hash1 = qHash
 	}
 
+	// 5. 尝试从 HTML 或内嵌 iframe 解析直连游戏服 FlashVars
+	var roleName string
+	iframeTarget := ""
+	if mIframe := iframeRegex.FindStringSubmatch(enterBodyStr); len(mIframe) >= 2 {
+		iframeTarget = mIframe[1]
+	} else if redirectLocation != "" && !strings.Contains(redirectLocation, "login_api.php") {
+		reqPage, err := http.NewRequestWithContext(ctx, http.MethodGet, redirectLocation, nil)
+		if err == nil {
+			reqPage.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+			if respPage, err := a.client.Do(reqPage); err == nil {
+				defer respPage.Body.Close()
+				pBytes, _ := io.ReadAll(respPage.Body)
+				pStr := string(pBytes)
+				if mIf := iframeRegex.FindStringSubmatch(pStr); len(mIf) >= 2 {
+					iframeTarget = mIf[1]
+				} else {
+					ip, port, h, t, p := parseFlashVars(pStr)
+					if ip != "" && port != "" {
+						targetGatewayURL = fmt.Sprintf("%s:%s", ip, port)
+					}
+					if h != "" {
+						mainTicket.Hash = h
+						crossTicket.Hash1 = h
+					}
+					if t != "" {
+						if tv, err := strconv.ParseInt(t, 10, 32); err == nil {
+							mainTicket.Time = int32(tv)
+							crossTicket.Time1 = int32(tv)
+						}
+					}
+					if p != "" {
+						roleName = p
+						if mainTicket.Code == "" {
+							mainTicket.Code = p
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if iframeTarget != "" {
+		if ifReq, err := http.NewRequestWithContext(ctx, http.MethodGet, iframeTarget, nil); err == nil {
+			ifReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+			if ifResp, err := a.client.Do(ifReq); err == nil {
+				defer ifResp.Body.Close()
+				ifBytes, _ := io.ReadAll(ifResp.Body)
+				ip, port, h, t, p := parseFlashVars(string(ifBytes))
+				if ip != "" && port != "" {
+					targetGatewayURL = fmt.Sprintf("%s:%s", ip, port)
+				}
+				if h != "" {
+					mainTicket.Hash = h
+					crossTicket.Hash1 = h
+				}
+				if t != "" {
+					if tv, err := strconv.ParseInt(t, 10, 32); err == nil {
+						mainTicket.Time = int32(tv)
+						crossTicket.Time1 = int32(tv)
+					}
+				}
+				if p != "" {
+					roleName = p
+					if mainTicket.Code == "" {
+						mainTicket.Code = p
+					}
+				}
+			}
+		}
+	}
+
 	if a.client.Jar != nil {
 		if u, err := url.Parse(a.enterURL); err == nil {
 			cookies = append(cookies, a.client.Jar.Cookies(u)...)
@@ -240,6 +314,7 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		Platform:    "fengwan",
 		ServerID:    normalizedServerID,
 		RawServerID: serverID,
+		RoleName:    roleName,
 		GatewayURL:  targetGatewayURL,
 		MainServer:  mainTicket,
 		CrossServer: crossTicket,
@@ -278,7 +353,34 @@ func extractServerSlug(serverID string) string {
 	return strings.ToLower(s)
 }
 
-var codeParamRegex = regexp.MustCompile(`[?&]code=([^&#]+)`)
+var (
+	codeParamRegex  = regexp.MustCompile(`[?&]code=([^&#]+)`)
+	iframeRegex     = regexp.MustCompile(`iframe\s+src="([^"]+)"`)
+	hashCodeRegex   = regexp.MustCompile(`[&?]hash_code=([a-f0-9]{32})`)
+	timeRegex       = regexp.MustCompile(`[&?]time=([0-9]+)`)
+	ipRegex         = regexp.MustCompile(`[&?]ip=([^&"'\s]+)`)
+	portRegex       = regexp.MustCompile(`[&?]port=([0-9]+)`)
+	playerNameRegex = regexp.MustCompile(`[&?]player_name=([^&"'\s]+)`)
+)
+
+func parseFlashVars(html string) (ip, port, hashCode, timeVal, playerName string) {
+	if m := hashCodeRegex.FindStringSubmatch(html); len(m) >= 2 {
+		hashCode = m[1]
+	}
+	if m := timeRegex.FindStringSubmatch(html); len(m) >= 2 {
+		timeVal = m[1]
+	}
+	if m := ipRegex.FindStringSubmatch(html); len(m) >= 2 {
+		ip = m[1]
+	}
+	if m := portRegex.FindStringSubmatch(html); len(m) >= 2 {
+		port = m[1]
+	}
+	if m := playerNameRegex.FindStringSubmatch(html); len(m) >= 2 {
+		playerName = m[1]
+	}
+	return
+}
 
 func extractQueryParam(rawURL, param string) string {
 	if rawURL == "" {

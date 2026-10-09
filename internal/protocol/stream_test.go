@@ -106,7 +106,7 @@ func TestStream_OOMDefense_GiantPacket(t *testing.T) {
 	// 构造伪造包头，声明 32MB 载荷，超出 16MB 安全红线
 	header := make([]byte, protocol.HeaderSize)
 	binary.BigEndian.PutUint32(header[0:4], 32*1024*1024)
-	binary.BigEndian.PutUint16(header[4:6], 9999)
+	binary.BigEndian.PutUint32(header[4:8], 9999)
 
 	r := bytes.NewReader(header)
 	_, err := protocol.ReadPacket(r)
@@ -119,7 +119,7 @@ func TestStream_TruncatedPacket(t *testing.T) {
 	// 声明 10 字节载荷，但实际只提供 4 字节数据
 	header := make([]byte, protocol.HeaderSize+4)
 	binary.BigEndian.PutUint32(header[0:4], 10)
-	binary.BigEndian.PutUint16(header[4:6], 8888)
+	binary.BigEndian.PutUint32(header[4:8], 8888)
 	copy(header[protocol.HeaderSize:], []byte("1234"))
 
 	r := bytes.NewReader(header)

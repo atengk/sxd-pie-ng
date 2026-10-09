@@ -19,7 +19,7 @@ var (
 	ErrPlayerLoginPayloadTooShort = errors.New("protocol: player login payload too short")
 )
 
-// PlayerLoginRequest 代表角色主服登录请求协议模型 (Mod_Player_Base.login, ActionID=0x0000)。
+// PlayerLoginRequest 代表角色主服登录请求协议模型 (Mod_Player_Base.login, ActionID=0x00000000)。
 type PlayerLoginRequest struct {
 	// Username 平台登录账号
 	Username string
@@ -49,13 +49,17 @@ type PlayerLoginResult struct {
 	Ingots int32
 	// Coins 当前铜钱数量
 	Coins int64
-	// Stamina 当前体力点数
+	// Stamina 当前基础体力点数 (基准上限 300)
 	Stamina int32
-	// MaxStamina 最大体力上限
+	// ExtraStamina 当前存储/额外/赠送体力点数 (Offset 116)
+	ExtraStamina int32
+	// MaxStamina 最大基础体力上限
 	MaxStamina int32
+	// VIP 角色 VIP 等级
+	VIP int32
 }
 
-// BuildPlayerLoginPacket 构造角色主服登录请求二进制协议封包 (ActionID 0x0000)。
+// BuildPlayerLoginPacket 构造角色主服登录请求二进制协议封包 (ActionID 0x00000000)。
 //
 // @param req 主服登录请求参数模型
 // @return 编码好的封包实例或错误
@@ -74,29 +78,27 @@ func BuildPlayerLoginPacket(req PlayerLoginRequest) (*Packet, error) {
 	}
 
 	w := NewWriter()
-	// 1. 保留前缀整型
-	w.WriteInt16(0)
-	// 2. 账号用户名
+	// 1. 账号用户名 (2 字节长度前缀 + 字符串)
 	w.WriteString(req.Username)
-	// 3. 动态验签哈希
+	// 2. 动态验签哈希
 	w.WriteString(req.Hash)
-	// 4. 动态验签时间戳
+	// 3. 动态验签时间戳
 	w.WriteString(req.Time)
-	// 5. 渠道标识
+	// 4. 渠道标识
 	w.WriteString(req.Source)
-	// 6. 空占位字符串 * 3
+	// 5. 空占位字符串 * 3
 	w.WriteString("")
 	w.WriteString("")
 	w.WriteString("")
-	// 7. 客户端固定参数
+	// 6. 客户端固定参数
 	w.WriteInt16(0x62B4)
 	w.WriteInt16(0x0160)
 	w.WriteInt8(0)
-	// 8. 平台名称
+	// 7. 平台名称
 	w.WriteString(req.Platform)
-	// 9. 接入协议类型
+	// 8. 接入协议类型
 	w.WriteString(req.ClientType)
-	// 10. 标志位与尾部账号
+	// 9. 标志位与尾部账号
 	w.WriteInt8(1)
 	w.WriteString(req.Username)
 
@@ -132,99 +134,73 @@ func ParsePlayerLoginResult(payload []byte) (*PlayerLoginResult, error) {
 		return nil, ErrPlayerLoginPayloadTooShort
 	}
 
-	offset := tryDetectOffset(body)
-
-	rd := bytes.NewReader(body)
 	res := &PlayerLoginResult{
-		MaxStamina: 300, // 满级角色基准体力上限
+		MaxStamina: 300,
 	}
 
-	if offset == 2 {
-		if err := binary.Read(rd, binary.BigEndian, &res.Result); err != nil {
-			return nil, err
-		}
-	}
-
-	// 1. RoleID (2B)
-	if err := binary.Read(rd, binary.BigEndian, &res.RoleID); err != nil {
-		return nil, err
-	}
-
-	// 2. RoleName (2B 长度 + UTF-8 字符串)
-	var nameLen uint16
-	if err := binary.Read(rd, binary.BigEndian, &nameLen); err != nil {
-		return nil, err
-	}
-	if int(nameLen) > rd.Len() {
+	var nameStart int
+	var nameLen int
+	if nLen, ok := isLikelyName(body, 0); ok {
+		nameStart = 2
+		nameLen = nLen
+		res.RoleName = string(body[nameStart : nameStart+nameLen])
+	} else if nLen, ok := isLikelyName(body, 4); ok {
+		res.Result = int16(binary.BigEndian.Uint16(body[0:2]))
+		res.RoleID = int16(binary.BigEndian.Uint16(body[2:4]))
+		nameStart = 6
+		nameLen = nLen
+		res.RoleName = string(body[nameStart : nameStart+nameLen])
+	} else if nLen, ok := isLikelyName(body, 2); ok {
+		res.RoleID = int16(binary.BigEndian.Uint16(body[0:2]))
+		nameStart = 4
+		nameLen = nLen
+		res.RoleName = string(body[nameStart : nameStart+nameLen])
+	} else {
 		return nil, ErrPlayerLoginPayloadTooShort
 	}
-	nameBytes := make([]byte, nameLen)
-	if _, err := io.ReadFull(rd, nameBytes); err != nil {
-		return nil, err
-	}
-	res.RoleName = string(nameBytes)
 
-	// 3. Level (4B int32)
-	if err := binary.Read(rd, binary.BigEndian, &res.Level); err != nil {
-		return nil, err
-	}
-	if res.Level > 0 {
-		res.MaxStamina = res.Level
+	pos := nameStart + nameLen
+	if pos+16 <= len(body) {
+		res.Level = int32(binary.BigEndian.Uint32(body[pos : pos+4]))
+		if res.Level > 0 {
+			res.MaxStamina = res.Level
+		}
+		res.Ingots = int32(binary.BigEndian.Uint32(body[pos+4 : pos+8]))
+		res.Coins = int64(binary.BigEndian.Uint64(body[pos+8 : pos+16]))
 	}
 
-	// 4. Ingots (4B int32)
-	if err := binary.Read(rd, binary.BigEndian, &res.Ingots); err != nil {
-		return nil, err
+	if pos+36 <= len(body) {
+		res.Stamina = int32(binary.BigEndian.Uint32(body[pos+32 : pos+36]))
 	}
 
-	// 5. Coins (8B int64)
-	if err := binary.Read(rd, binary.BigEndian, &res.Coins); err != nil {
-		return nil, err
+	if pos+56 <= len(body) {
+		res.VIP = int32(binary.BigEndian.Uint32(body[pos+52 : pos+56]))
 	}
 
-	// 6. 跳过中间 16 字节 (val1 8B + val2 8B)
-	if _, err := rd.Seek(16, io.SeekCurrent); err != nil {
-		return nil, err
-	}
-
-	// 7. Stamina (4B int32)
-	if err := binary.Read(rd, binary.BigEndian, &res.Stamina); err != nil {
-		return nil, err
+	if pos+109 <= len(body) {
+		res.ExtraStamina = int32(binary.BigEndian.Uint32(body[pos+105 : pos+109]))
 	}
 
 	return res, nil
 }
 
-// tryDetectOffset 智能嗅探载荷是否带有 2 字节 Result/ActionID 前缀。
-// 返回 0 表示无前缀 (直接以 RoleID 开始)，返回 2 表示含有 2 字节前缀。
-func tryDetectOffset(body []byte) int {
-	check := func(start int) bool {
-		if len(body) < start+8 {
-			return false
-		}
-		nameLen := int(binary.BigEndian.Uint16(body[start+2 : start+4]))
-		if nameLen <= 0 || nameLen > 30 || start+4+nameLen+36 > len(body) {
-			return false
-		}
-		nameBytes := body[start+4 : start+4+nameLen]
-		for _, b := range nameBytes {
-			if b < 32 {
-				return false
-			}
-		}
-		if !utf8.Valid(nameBytes) {
-			return false
-		}
-		lvl := int32(binary.BigEndian.Uint32(body[start+4+nameLen : start+4+nameLen+4]))
-		return lvl >= 1 && lvl <= 500
+// isLikelyName 校验指定偏移处是否为合法的 UTF-8 角色名称长度与字节内容。
+func isLikelyName(b []byte, offset int) (int, bool) {
+	if len(b) < offset+2 {
+		return 0, false
 	}
-
-	if check(0) {
-		return 0
+	nLen := int(binary.BigEndian.Uint16(b[offset : offset+2]))
+	if nLen <= 0 || nLen > 30 || offset+2+nLen > len(b) {
+		return 0, false
 	}
-	if check(2) {
-		return 2
+	nameBytes := b[offset+2 : offset+2+nLen]
+	if !utf8.Valid(nameBytes) {
+		return 0, false
 	}
-	return 0
+	for _, ch := range string(nameBytes) {
+		if ch < 32 {
+			return 0, false
+		}
+	}
+	return nLen, true
 }
-

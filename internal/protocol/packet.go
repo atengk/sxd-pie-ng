@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	// HeaderSize 固定包头长度: [4B Length] + [2B ActionID]
-	HeaderSize = 6
+	// HeaderSize 固定包头长度: [4B Length] + [4B ActionID]
+	HeaderSize = 8
 
-	// ActionIDSize 动作编号字段占用字节数 (2B)
-	ActionIDSize = 2
+	// ActionIDSize 动作编号字段占用字节数 (4B: 高 16 位 Module, 低 16 位 Action)
+	ActionIDSize = 4
 
 	// MaxPayloadSize 默认单包载荷最大长度 (16MB)，防御恶意大包导致 OOM
 	MaxPayloadSize = 16 * 1024 * 1024
@@ -30,26 +30,26 @@ var (
 	ErrPayloadTruncated = errors.New("protocol: payload data is truncated")
 )
 
-// MakeActionID 计算由 Module 与 Action 组合的大端序 16 位 ActionID: (action << 8) | module。
-func MakeActionID(module uint8, action uint8) uint16 {
-	return (uint16(action) << 8) | uint16(module)
+// MakeActionID 计算由 Module 与 Action 组合的大端序 32 位 ActionID: (module << 16) | action。
+func MakeActionID(module uint16, action uint16) uint32 {
+	return (uint32(module) << 16) | uint32(action)
 }
 
-// SplitActionID 拆解 16 位 ActionID 为底层的 Module 模块号与 Action 动作号。
-func SplitActionID(actionID uint16) (module uint8, action uint8) {
-	return uint8(actionID & 0xFF), uint8(actionID >> 8)
+// SplitActionID 拆解 32 位 ActionID 为底层的 Module 模块号与 Action 动作号。
+func SplitActionID(actionID uint32) (module uint16, action uint16) {
+	return uint16(actionID >> 16), uint16(actionID & 0xFFFF)
 }
 
 // Packet 代表神仙道私有二进制协议数据封包。
 type Packet struct {
-	// ActionID 业务动作指令编号 (大端序 uint16)
-	ActionID uint16
+	// ActionID 业务动作指令编号 (大端序 uint32: [Module uint16][Action uint16])
+	ActionID uint32
 	// Payload 封包承载的应用层数据载荷 (已透明解压)
 	Payload []byte
 }
 
 // NewPacket 创建一个初始化好的 Packet 实例。
-func NewPacket(actionID uint16, payload []byte) *Packet {
+func NewPacket(actionID uint32, payload []byte) *Packet {
 	if payload == nil {
 		payload = []byte{}
 	}
@@ -60,7 +60,7 @@ func NewPacket(actionID uint16, payload []byte) *Packet {
 }
 
 // Marshal 将封包按原生二进制线格式序列化为字节切片。
-// 线格式首部 4 字节大端序长度包含 ActionID 的 2 字节与载荷长度。
+// 线格式首部 4 字节大端序长度包含 ActionID 的 4 字节与载荷长度。
 func (p *Packet) Marshal() ([]byte, error) {
 	if len(p.Payload) > MaxPayloadSize {
 		return nil, fmt.Errorf("%w: length %d > %d", ErrPacketTooLarge, len(p.Payload), MaxPayloadSize)
@@ -70,7 +70,7 @@ func (p *Packet) Marshal() ([]byte, error) {
 	buf := make([]byte, 4+bodyLen)
 
 	binary.BigEndian.PutUint32(buf[0:4], bodyLen)
-	binary.BigEndian.PutUint16(buf[4:6], p.ActionID)
+	binary.BigEndian.PutUint32(buf[4:8], p.ActionID)
 	copy(buf[HeaderSize:], p.Payload)
 
 	return buf, nil
@@ -91,7 +91,7 @@ func (p *Packet) MarshalCompressed() ([]byte, error) {
 	buf := make([]byte, 4+bodyLen)
 
 	binary.BigEndian.PutUint32(buf[0:4], bodyLen)
-	binary.BigEndian.PutUint16(buf[4:6], p.ActionID)
+	binary.BigEndian.PutUint32(buf[4:8], p.ActionID)
 	copy(buf[HeaderSize:], compressed)
 
 	return buf, nil
@@ -117,10 +117,13 @@ func Unmarshal(data []byte) (*Packet, error) {
 	}
 
 	fullBody := data[4 : 4+bodyLen]
-	// 1. 尝试整包压缩自愈嗅探 (神仙道整包压缩格式: [4B len] + [zlib 流包含 ActionID 与载荷])
+	// 1. 尝试整包压缩自愈嗅探 (神仙道整包压缩格式: [4B len] + [zlib 流包含 4B ActionID 与载荷])
 	if decompressed, ok := DecompressWholePacketIfNeeded(fullBody); ok {
-		actionID := binary.BigEndian.Uint16(decompressed[0:2])
-		payload := decompressed[2:]
+		if len(decompressed) < ActionIDSize {
+			return nil, ErrPacketTooShort
+		}
+		actionID := binary.BigEndian.Uint32(decompressed[0:4])
+		payload := decompressed[4:]
 		return &Packet{
 			ActionID: actionID,
 			Payload:  payload,
@@ -128,7 +131,7 @@ func Unmarshal(data []byte) (*Packet, error) {
 	}
 
 	// 2. 标准格式与载荷级压缩
-	actionID := binary.BigEndian.Uint16(data[4:6])
+	actionID := binary.BigEndian.Uint32(data[4:8])
 	rawPayload := data[HeaderSize : HeaderSize+payloadLen]
 
 	// 透明处理 zlib 压缩嗅探与自愈

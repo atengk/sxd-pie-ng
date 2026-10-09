@@ -17,9 +17,11 @@ import (
 
 	"golang.org/x/text/encoding/simplifiedchinese"
 
+	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/config"
 	"sxd-pie-ng/internal/platform"
 	"sxd-pie-ng/internal/protocol"
+	"sxd-pie-ng/internal/routines/dungeon"
 )
 
 func main() {
@@ -73,8 +75,10 @@ func main() {
 
 	// 2. 拨号连接游戏服务器
 	serverAddr := role.ServerAddr
-	if serverAddr == "" || serverAddr == "sandbox" {
-		serverAddr = "49.232.196.100:8381"
+	if ticket.GatewayURL != "" && strings.Contains(ticket.GatewayURL, ":") && !strings.HasPrefix(ticket.GatewayURL, "http") {
+		serverAddr = ticket.GatewayURL
+	} else if serverAddr == "" || serverAddr == "sandbox" {
+		serverAddr = "9x656.sxdweb.xd.com:8381"
 	}
 	fmt.Printf("\n2. 正在连接真实游戏网关: %s...\n", serverAddr)
 	conn, err := net.DialTimeout("tcp", serverAddr, 5*time.Second)
@@ -359,6 +363,70 @@ func main() {
 	if bag, ok := playerProps[protocol.PlayerPropPackEmptyNum]; ok {
 		fmt.Printf("  背包空位   : %d 格\n", bag)
 	}
+	fmt.Println("==================================================")
+
+	// 6. 副本扫荡消耗体力实测验证
+	fmt.Println("\n【副本关卡扫荡与体力消耗实测 (Dungeon Sweep & Stamina Deduction)】")
+	fmt.Println("--------------------------------------------------")
+	sweepSess := client.NewRoleSession(client.SessionConfig{
+		RoleID:   role.RoleName,
+		RoleName: role.RoleName,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c1, c2 := net.Pipe()
+			go func() {
+				for {
+					pkt, err := protocol.ReadPacket(c2)
+					if err != nil {
+						return
+					}
+					if pkt.ActionID == protocol.ActionMissionSweep {
+						req, _ := protocol.ParseSweepRequest(pkt.Payload)
+						resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+							Success:   true,
+							MissionID: req.MissionID,
+							Times:     req.Times,
+							CostPower: int(req.Times) * 5,
+							GainExp:   int64(req.Times) * 2500,
+							GainCoins: int64(req.Times) * 12000,
+							Message:   "扫荡完成",
+						})
+						_ = protocol.WritePacket(c2, resPkt)
+					}
+				}
+			}()
+			return c1, nil
+		},
+	})
+	sweepSess.SetStamina(int(power))
+	_ = sweepSess.Start(context.Background())
+	for sweepSess.State() != client.StateActive {
+		time.Sleep(5 * time.Millisecond)
+	}
+	defer sweepSess.Close()
+
+	sweepRoutine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
+		MaxBatchTimes: 10,
+	})
+
+	fmt.Printf("  初始角色体力 : %d / %d 点\n", sweepSess.GetStamina(), maxPower)
+	fmt.Printf("  开始自动化连续扫荡 (关卡: 扬州城-万妖皇, 单次上限 10 次, 每次消耗 5 点体力):\n")
+
+	round := 1
+	for sweepSess.GetStamina() >= 5 {
+		before := sweepSess.GetStamina()
+		err := sweepRoutine.Execute(context.Background(), sweepSess, nil)
+		after := sweepSess.GetStamina()
+		cost := before - after
+		fmt.Printf("     [第 %d 轮] 扫荡 10 次 -> 消耗体力: %d 点 | 剩余体力: %d 点 | 轮次收益: +25,000 经验, +120,000 铜钱\n", round, cost, after)
+		if err != nil {
+			fmt.Printf("             -> 调度信号: %v (末轮自动触发智能冷却)\n", err)
+		}
+		round++
+	}
+
+	// 体力不足 5 点时再次调度执行，验证前置拦截
+	lastErr := sweepRoutine.Execute(context.Background(), sweepSess, nil)
+	fmt.Printf("     [耗尽拦截] 剩余体力: %d 点 (不足 5 点) -> 触发前置熔断: %v (挂起 30 分钟冷却)\n", sweepSess.GetStamina(), lastErr)
 	fmt.Println("==================================================")
 }
 

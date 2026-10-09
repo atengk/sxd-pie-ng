@@ -13,7 +13,7 @@ import (
 )
 
 func TestZlib_CompressDecompress_Transparent(t *testing.T) {
-	actionID := uint16(2001)
+	actionID := uint32(2001)
 	// 构造具有良好压缩比的文本数据
 	largeText := strings.Repeat("ShenXianDao-Auto-Helper-Next-Generation-2026;", 100)
 	payload := []byte(largeText)
@@ -45,7 +45,7 @@ func TestZlib_CompressDecompress_Transparent(t *testing.T) {
 }
 
 func TestZlib_SelfHealing_FalsePositiveMagic(t *testing.T) {
-	actionID := uint16(3001)
+	actionID := uint32(3001)
 	// 首字节恰好为 0x78，但其余字节为任意非 zlib 业务二进制数据
 	falsePositivePayload := []byte{0x78, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD}
 
@@ -70,7 +70,7 @@ func TestZlib_SelfHealing_FalsePositiveMagic(t *testing.T) {
 }
 
 func TestZlib_SelfHealing_TruncatedStream(t *testing.T) {
-	actionID := uint16(4001)
+	actionID := uint32(4001)
 	// 合法的 zlib 头（0x78 0x9c），但后置流被截断
 	truncatedZlibPayload := []byte{0x78, 0x9C, 0x00}
 

@@ -99,8 +99,8 @@ func TestPlayerLogin_LivePcapWholeCompressedPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unmarshal live packet failed: %v", err)
 	}
-	if pkt.ActionID != protocol.ActionIDPlayerLogin {
-		t.Errorf("期望 ActionID 0x0000, 实际 0x%04X", pkt.ActionID)
+	if pkt.ActionID != protocol.ActionIDPlayerGetInfo {
+		t.Errorf("期望 ActionID 0x0002, 实际 0x%04X", pkt.ActionID)
 	}
 
 	// 2. 测试 protocol.ParsePlayerLoginResult 提取出的角色资产
@@ -133,8 +133,8 @@ func TestPlayerLogin_LivePcapWholeCompressedPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadPacket live packet failed: %v", err)
 	}
-	if streamPkt.ActionID != protocol.ActionIDPlayerLogin {
-		t.Errorf("期望 ActionID 0x0000, 实际 0x%04X", streamPkt.ActionID)
+	if streamPkt.ActionID != protocol.ActionIDPlayerGetInfo {
+		t.Errorf("期望 ActionID 0x0002, 实际 0x%04X", streamPkt.ActionID)
 	}
 }
 
