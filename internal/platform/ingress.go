@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // LoadTicketFromIni 从外部 user.ini 文件解析特定角色的短期鉴权凭据 (Ticket Ingress)。
@@ -34,13 +37,19 @@ func LoadTicketFromIni(iniPath, targetRoleName string) (*Ticket, error) {
 		return nil, fmt.Errorf("platform: user.ini not found")
 	}
 
-	f, err := os.Open(iniPath)
+	rawBytes, err := os.ReadFile(iniPath)
 	if err != nil {
 		return nil, fmt.Errorf("platform: failed to open ini: %w", err)
 	}
-	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	text := string(rawBytes)
+	if !utf8.Valid(rawBytes) {
+		if utf8Decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(rawBytes); err == nil && len(utf8Decoded) > 0 {
+			text = string(utf8Decoded)
+		}
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(text))
 	currentSection := ""
 	sectionData := make(map[string]string)
 	sections := make(map[string]map[string]string)

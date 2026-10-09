@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"sxd-pie-ng/internal/protocol"
@@ -57,9 +58,9 @@ type SessionConfig struct {
 	// Hash1 跨服验签散列 (Mod_StLogin_Base 0x005E)
 	Hash1 string
 
-	// HeartbeatInterval 心跳定时保活间隔 (默认 60s)
+	// HeartbeatInterval 心跳定时保活间隔 (默认 1.5s，抓包实测网关超时为 5s)
 	HeartbeatInterval time.Duration
-	// HeartbeatTimeout 心跳超时时间 (默认 15s)
+	// HeartbeatTimeout 心跳超时时间 (默认 5s)
 	HeartbeatTimeout time.Duration
 	// HeartbeatActionID 心跳消息号 (默认 0x00000017)
 	HeartbeatActionID uint32
@@ -110,15 +111,17 @@ type RoleSession struct {
 
 	reconnectAttempts int
 	isCustomDialer    bool
+
+	lastActionID atomic.Uint32
 }
 
 // NewRoleSession 构造一个新的角色会话实例。
 func NewRoleSession(cfg SessionConfig) *RoleSession {
 	if cfg.HeartbeatInterval <= 0 {
-		cfg.HeartbeatInterval = 60 * time.Second
+		cfg.HeartbeatInterval = 1500 * time.Millisecond
 	}
 	if cfg.HeartbeatTimeout <= 0 {
-		cfg.HeartbeatTimeout = 15 * time.Second
+		cfg.HeartbeatTimeout = 5 * time.Second
 	}
 	if cfg.HeartbeatActionID == 0 {
 		cfg.HeartbeatActionID = protocol.ActionHeartbeat
@@ -311,6 +314,16 @@ func (s *RoleSession) Close() {
 	slog.Info("角色会话已安全关闭", "role_id", s.cfg.RoleID, "role_name", s.cfg.RoleName)
 }
 
+// LastActionID 获取最后一次向对端发送的协议 ActionID。
+func (s *RoleSession) LastActionID() uint32 {
+	return s.lastActionID.Load()
+}
+
+// SetLastActionID 手动设置最后一次向对端发送的协议 ActionID。
+func (s *RoleSession) SetLastActionID(actionID uint32) {
+	s.lastActionID.Store(actionID)
+}
+
 // Send 向对端发送一个未压缩协议封包。
 func (s *RoleSession) Send(p *protocol.Packet) error {
 	s.writeMu.Lock()
@@ -323,7 +336,11 @@ func (s *RoleSession) Send(p *protocol.Packet) error {
 		return ErrNotConnected
 	}
 
-	return protocol.WritePacket(s.conn, p)
+	err := protocol.WritePacket(s.conn, p)
+	if err == nil && p != nil && p.ActionID != s.cfg.HeartbeatActionID {
+		s.lastActionID.Store(p.ActionID)
+	}
+	return err
 }
 
 // SendCompressed 向对端发送经 zlib 压缩的协议封包。
@@ -338,7 +355,11 @@ func (s *RoleSession) SendCompressed(p *protocol.Packet) error {
 		return ErrNotConnected
 	}
 
-	return protocol.WriteCompressedPacket(s.conn, p)
+	err := protocol.WriteCompressedPacket(s.conn, p)
+	if err == nil && p != nil && p.ActionID != s.cfg.HeartbeatActionID {
+		s.lastActionID.Store(p.ActionID)
+	}
+	return err
 }
 
 // SendRaw 向对端直接写入原始字节切片 (并发安全加锁)。
@@ -354,6 +375,12 @@ func (s *RoleSession) SendRaw(data []byte) error {
 	}
 
 	_, err := s.conn.Write(data)
+	if err == nil && len(data) >= 8 {
+		actID := binary.BigEndian.Uint32(data[4:8])
+		if actID != s.cfg.HeartbeatActionID {
+			s.lastActionID.Store(actID)
+		}
+	}
 	return err
 }
 
@@ -410,9 +437,8 @@ func (s *RoleSession) runLoop() {
 			}
 		}
 
-		// 4. 激活会话状态，重置重连计数
+		// 4. 激活会话状态
 		s.setState(StateActive)
-		s.reconnectAttempts = 0
 
 		// 5. 运行激活态心跳保活与异常等待
 		if !s.runActiveSession(conn, readErrCh) {
@@ -489,6 +515,10 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 	ticker := time.NewTicker(s.cfg.HeartbeatInterval)
 	defer ticker.Stop()
 
+	// 连接若能持续稳定超过 10 秒（避开网关 5s 未鉴权断链熔断期），重置重连计数
+	stableTimer := time.NewTimer(10 * time.Second)
+	defer stableTimer.Stop()
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -496,19 +526,30 @@ func (s *RoleSession) runActiveSession(conn net.Conn, readErrCh <-chan error) bo
 			s.setState(StateClosed)
 			return false
 
+		case <-stableTimer.C:
+			// 连接已稳定存活，重置异常重试计数
+			s.reconnectAttempts = 0
+
 		case err := <-readErrCh:
 			slog.Warn("网络读取循环退出", "role_id", s.cfg.RoleID, "error", err)
 			s.closeCurrentConn()
 			return s.handleConnectFailure(err)
 
 		case <-ticker.C:
-			// 发送心跳包
-			heartbeat := protocol.NewPacket(s.cfg.HeartbeatActionID, []byte{})
+			// 发送心跳包：携带 4 字节前序 ActionID（神仙道网关防假死与保活校验）
+			prevAct := s.lastActionID.Load()
+			if prevAct == 0 {
+				prevAct = s.cfg.HeartbeatActionID
+			}
+			hbPayload := make([]byte, 4)
+			binary.BigEndian.PutUint32(hbPayload, prevAct)
+			heartbeat := protocol.NewPacket(s.cfg.HeartbeatActionID, hbPayload)
 			if err := s.Send(heartbeat); err != nil {
 				slog.Warn("发送心跳失败", "role_id", s.cfg.RoleID, "error", err)
 				s.closeCurrentConn()
 				return s.handleConnectFailure(err)
 			}
+			s.lastActionID.Store(s.cfg.HeartbeatActionID)
 		}
 	}
 }
@@ -582,7 +623,7 @@ func runMockGameServer(conn net.Conn) {
 
 		case protocol.ActionHeartbeat:
 			// 响应心跳包
-			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{})
+			hbPkt := protocol.NewPacket(protocol.ActionHeartbeat, []byte{0x06, 0x00, 0x0a, 0x28})
 			_ = protocol.WritePacket(conn, hbPkt)
 
 		case protocol.ActionIDPracticeStart:

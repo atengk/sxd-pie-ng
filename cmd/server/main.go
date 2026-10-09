@@ -269,6 +269,7 @@ func run(ctx context.Context, args []string) error {
 			roleCfg := client.SessionConfig{
 				RoleID:               roleID,
 				RoleName:             role.RoleName,
+				Username:             acc.Username,
 				ServerAddr:           serverAddr,
 				ServerID:             role.ServerID,
 				Platform:             acc.Platform,

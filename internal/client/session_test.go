@@ -166,6 +166,9 @@ func TestRoleSession_Heartbeat(t *testing.T) {
 				return
 			}
 			if pkt.ActionID == actionHeartbeat {
+				if len(pkt.Payload) != 4 {
+					t.Errorf("expected 4-byte heartbeat payload, got %d", len(pkt.Payload))
+				}
 				countMu.Lock()
 				heartbeatCount++
 				if heartbeatCount >= 3 {
