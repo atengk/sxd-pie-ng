@@ -6,9 +6,11 @@ package pvp
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"sxd-pie-ng/internal/client"
+	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -21,7 +23,52 @@ func NewArenaRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		0,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行对抗任务: 本服竞技场自动挑战与领奖")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+
+			// 1. 拟人防封随机抖动
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			slog.Info("正在执行对抗任务: 本服竞技场自动挑战与领奖", "role_id", session.RoleID())
+
+			// 2. 发送查询剩余挑战次数
+			timesPkt, err := protocol.BuildArenaGetTimesPacket(protocol.ArenaGetTimesRequest{
+				PrevAct: protocol.ActionIDTownEnter,
+			})
+			if err != nil {
+				return fmt.Errorf("构造竞技场次数查询封包失败: %w", err)
+			}
+			if err := session.Send(timesPkt); err != nil {
+				return fmt.Errorf("发送竞技场次数查询失败: %w", err)
+			}
+
+			// 3. 发送查询可挑战对手列表
+			opponentsPkt, err := protocol.BuildArenaGetOpponentsPacket(protocol.ArenaGetOpponentsRequest{
+				PrevAct: protocol.ActionIDArenaGetTimes,
+			})
+			if err != nil {
+				return fmt.Errorf("构造竞技场对手查询封包失败: %w", err)
+			}
+			if err := session.Send(opponentsPkt); err != nil {
+				return fmt.Errorf("发送竞技场对手查询失败: %w", err)
+			}
+
+			// 4. 发起挑战 (默认挑战可挑战位 TargetRank=5，符合抓包行为)
+			challengePkt, err := protocol.BuildArenaChallengePacket(protocol.ArenaChallengeRequest{
+				TargetRank: 5,
+				PrevAct:    protocol.ActionIDArenaGetOpponents,
+			})
+			if err != nil {
+				return fmt.Errorf("构造竞技场挑战封包失败: %w", err)
+			}
+			if err := session.Send(challengePkt); err != nil {
+				return fmt.Errorf("发送竞技场挑战失败: %w", err)
+			}
+
+			slog.Info("本服竞技场挑战完成", "role_id", session.RoleID(), "target_rank", 5)
 			return nil
 		},
 	)

@@ -10,7 +10,10 @@ const (
 	ModuleTown            uint16 = 1  // 城镇场景模块 (Mod_Town_Base)
 	ModuleMission         uint16 = 4  // 关卡任务模块 (Mod_Mission_Base)
 	ModuleItem            uint16 = 5  // 物品背包模块 (Mod_Item_Base)
+	ModuleFarm            uint16 = 13 // 药园农场模块 (Mod_Farm_Base)
+	ModuleFate            uint16 = 21 // 仙履奇缘模块 (Mod_Fate_Base)
 	ModuleMissionPractice uint16 = 25 // 副本挂机扫荡模块 (Mod_MissionPractice_Base)
+	ModuleArena           uint16 = 28 // 竞技场模块 (Mod_Arena_Base)
 	ModuleHeroMission     uint16 = 35 // 英雄副本模块 (Mod_HeroMission_Base)
 	ModuleStLogin         uint16 = 94 // 跨服/网页登录模块 (Mod_StLogin_Base)
 )
@@ -36,6 +39,31 @@ const (
 	ActionIDTownEnter uint32 = 0x00010000
 	// ActionIDTownLeave 离开城镇协议号 (Module 1, Action 1 -> 0x00010001)
 	ActionIDTownLeave uint32 = 0x00010001
+
+	// ActionIDFarmGetInfo 查询药园土地与种植状态 (Module 13, Action 0 -> 0x000D0000)
+	ActionIDFarmGetInfo uint32 = 0x000D0000
+	// ActionIDFarmPlant 药园种植作物 (Module 13, Action 24 -> 0x000D0018)
+	ActionIDFarmPlant uint32 = 0x000D0018
+	// ActionIDFarmHarvest 药园收获作物 (Module 13, Action 25 -> 0x000D0019)
+	ActionIDFarmHarvest uint32 = 0x000D0019
+
+	// ActionIDFateGetInfo 查询仙履奇缘状态 (Module 21, Action 0 -> 0x00150000)
+	ActionIDFateGetInfo uint32 = 0x00150000
+	// ActionIDFateGetQuestion 获取仙履奇缘题目与选项 (Module 21, Action 1 -> 0x00150001)
+	ActionIDFateGetQuestion uint32 = 0x00150001
+	// ActionIDFateAnswer 仙履奇缘回答提交选项 (Module 21, Action 2 -> 0x00150002)
+	ActionIDFateAnswer uint32 = 0x00150002
+
+	// ActionIDArenaGetTimes 查询竞技场剩余挑战次数 (Module 28, Action 13 -> 0x001C000D)
+	ActionIDArenaGetTimes uint32 = 0x001C000D
+	// ActionIDArenaGetRanking 查询玩家竞技场排名 (Module 28, Action 12 -> 0x001C000C)
+	ActionIDArenaGetRanking uint32 = 0x001C000C
+	// ActionIDArenaGetOpponents 查询竞技场可挑战对手列表 (Module 28, Action 1 -> 0x001C0001)
+	ActionIDArenaGetOpponents uint32 = 0x001C0001
+	// ActionIDArenaChallenge 发起竞技场挑战 (Module 28, Action 2 -> 0x001C0002)
+	ActionIDArenaChallenge uint32 = 0x001C0002
+	// ActionIDArenaNotify 竞技场排名变更服务端通知 (Module 28, Action 11 -> 0x001C000B)
+	ActionIDArenaNotify uint32 = 0x001C000B
 
 	// ActionIDPracticeGetInfo 查询副本扫荡信息 (Module 25, Action 7 -> 0x00190007)
 	ActionIDPracticeGetInfo uint32 = 0x00190007

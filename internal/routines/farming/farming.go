@@ -6,11 +6,13 @@ package farming
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"sxd-pie-ng/internal/client"
 	"sxd-pie-ng/internal/dictionary"
+	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
 
@@ -23,7 +25,53 @@ func NewHerbGardenRoutine() scheduler.ActivityRoutine {
 		scheduler.PriorityNormal,
 		15*time.Minute,
 		func(ctx context.Context, session *client.RoleSession, jitter *scheduler.Jitter) error {
-			slog.Info("正在执行资源任务: 药园种植巡检与采摘")
+			if session == nil {
+				return client.ErrNotConnected
+			}
+
+			// 1. 拟人防封随机抖动
+			if jitter != nil {
+				_ = jitter.Wait(ctx)
+			}
+
+			slog.Info("正在执行资源任务: 药园种植巡检与采摘", "role_id", session.RoleID())
+
+			// 2. 发送查询土地状态请求
+			infoPkt, err := protocol.BuildFarmGetInfoPacket(protocol.FarmGetInfoRequest{
+				PrevAct: protocol.ActionIDTownEnter,
+			})
+			if err != nil {
+				return fmt.Errorf("构造药园查询封包失败: %w", err)
+			}
+			if err := session.Send(infoPkt); err != nil {
+				return fmt.Errorf("发送药园查询请求失败: %w", err)
+			}
+
+			// 3. 针对默认土地序列 (如 10, 11, 12, 13) 尝试采摘成熟药草
+			defaultLands := []int32{10, 11, 12, 13}
+			for _, landID := range defaultLands {
+				harvestPkt, err := protocol.BuildFarmHarvestPacket(protocol.FarmHarvestRequest{
+					LandID:  landID,
+					PrevAct: protocol.ActionIDFarmGetInfo,
+				})
+				if err == nil {
+					_ = session.Send(harvestPkt)
+				}
+			}
+
+			// 4. 对空闲土地自动种植经验草或种子 (种子/伙伴 0xA9)
+			for _, landID := range defaultLands {
+				plantPkt, err := protocol.BuildFarmPlantPacket(protocol.FarmPlantRequest{
+					LandID:       landID,
+					SeedOrRoleID: 169, // 仙玲珑/主力经验草种子
+					PrevAct:      protocol.ActionIDFarmHarvest,
+				})
+				if err == nil {
+					_ = session.Send(plantPkt)
+				}
+			}
+
+			slog.Info("药园种植与收获巡检完成", "role_id", session.RoleID(), "processed_lands", len(defaultLands))
 			return nil
 		},
 	)
