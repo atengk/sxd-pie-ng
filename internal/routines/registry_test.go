@@ -49,8 +49,8 @@ func TestRoutines_DefinitionsAndRegistry(t *testing.T) {
 
 	// 验证特定玩法自定义开关
 	customMap := map[string]bool{
-		"herb_garden": false,
-		"arena":       false,
+		"herb_garden":   false,
+		"dungeon_sweep": false,
 	}
 	sched2 := scheduler.NewRoleScheduler("role-test-2", nil, fastJitter)
 	regCount2 := factory.RegisterAll(sched2, customMap)

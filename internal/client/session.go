@@ -359,7 +359,7 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 			timeStr = fmt.Sprintf("%d", time.Now().Unix())
 		}
 		platform := s.cfg.Platform
-		if platform == "" {
+		if platform == "" || platform == "fengwan" {
 			platform = "疯玩"
 		}
 		hash := s.cfg.Hash

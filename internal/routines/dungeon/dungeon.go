@@ -6,6 +6,7 @@ package dungeon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -120,34 +121,40 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			gainExp := int64(times) * 2500
 			gainCoins := int64(times) * 12000
 
-			callCtx, callCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
 			respPkt, callErr := session.Call(callCtx, pkt, protocol.ActionMissionSweep)
 			callCancel()
 
-			if callErr == nil && respPkt != nil {
-				// 7. 解析服务端返回的真实扫荡结算回包
-				res, pErr := protocol.ParseSweepResult(respPkt.Payload)
-				if pErr == nil {
-					if !res.Success {
-						slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "message", res.Message)
-						if strings.Contains(res.Message, "体力不足") {
-							return scheduler.ErrStaminaDepleted
-						}
-						if strings.Contains(res.Message, "背包已满") {
-							return scheduler.ErrBagFull
-						}
-						return fmt.Errorf("dungeon: sweep rejected by server: %s", res.Message)
-					}
-					if res.CostPower > 0 {
-						costStamina = res.CostPower
-					}
-					if res.GainExp > 0 {
-						gainExp = res.GainExp
-					}
-					if res.GainCoins > 0 {
-						gainCoins = res.GainCoins
-					}
+			if callErr != nil {
+				return fmt.Errorf("dungeon: 发送扫荡指令未收到服务端回包: %w", callErr)
+			}
+			if respPkt == nil {
+				return errors.New("dungeon: 服务端返回空扫荡响应")
+			}
+
+			// 7. 解析服务端返回的真实扫荡结算回包
+			res, pErr := protocol.ParseSweepResult(respPkt.Payload)
+			if pErr != nil {
+				return fmt.Errorf("dungeon: 解析扫荡回包失败: %w", pErr)
+			}
+			if !res.Success {
+				slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "message", res.Message)
+				if strings.Contains(res.Message, "体力不足") {
+					return scheduler.ErrStaminaDepleted
 				}
+				if strings.Contains(res.Message, "背包已满") {
+					return scheduler.ErrBagFull
+				}
+				return fmt.Errorf("dungeon: sweep rejected by server: %s", res.Message)
+			}
+			if res.CostPower > 0 {
+				costStamina = res.CostPower
+			}
+			if res.GainExp > 0 {
+				gainExp = res.GainExp
+			}
+			if res.GainCoins > 0 {
+				gainCoins = res.GainCoins
 			}
 
 			// 8. 扣除本地体力并累加收益快照

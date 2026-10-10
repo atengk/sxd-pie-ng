@@ -48,12 +48,25 @@ func TestDungeonSweep_NormalExecution(t *testing.T) {
 	defer sess.Close()
 	defer srvConn.Close()
 
-	// 模拟服务端接收扫荡包
+	// 模拟服务端接收扫荡包并响应结算回包
 	pktCh := make(chan *protocol.Packet, 1)
 	go func() {
 		pkt, err := protocol.ReadPacket(srvConn)
 		if err == nil {
 			pktCh <- pkt
+			if pkt.ActionID == protocol.ActionMissionSweep {
+				req, _ := protocol.ParseSweepRequest(pkt.Payload)
+				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+					Success:   true,
+					MissionID: req.MissionID,
+					Times:     req.Times,
+					CostPower: int(req.Times) * 5,
+					GainExp:   int64(req.Times) * 2500,
+					GainCoins: int64(req.Times) * 12000,
+					Message:   "扫荡完成",
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
+			}
 		}
 	}()
 
@@ -140,12 +153,25 @@ func TestDungeonSweep_201Stamina_MultiBatchDepletion(t *testing.T) {
 	defer sess.Close()
 	defer srvConn.Close()
 
-	// 服务端异步接收通道
+	// 服务端异步接收通道并响应扫荡结果
 	go func() {
 		for {
-			_, err := protocol.ReadPacket(srvConn)
+			pkt, err := protocol.ReadPacket(srvConn)
 			if err != nil {
 				return
+			}
+			if pkt.ActionID == protocol.ActionMissionSweep {
+				req, _ := protocol.ParseSweepRequest(pkt.Payload)
+				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+					Success:   true,
+					MissionID: req.MissionID,
+					Times:     req.Times,
+					CostPower: int(req.Times) * 5,
+					GainExp:   int64(req.Times) * 2500,
+					GainCoins: int64(req.Times) * 12000,
+					Message:   "扫荡完成",
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
 			}
 		}
 	}()
@@ -209,9 +235,22 @@ func TestDungeonSweep_CustomBatchAndExactDeduction(t *testing.T) {
 
 	go func() {
 		for {
-			_, err := protocol.ReadPacket(srvConn)
+			pkt, err := protocol.ReadPacket(srvConn)
 			if err != nil {
 				return
+			}
+			if pkt.ActionID == protocol.ActionMissionSweep {
+				req, _ := protocol.ParseSweepRequest(pkt.Payload)
+				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
+					Success:   true,
+					MissionID: req.MissionID,
+					Times:     req.Times,
+					CostPower: int(req.Times) * 5,
+					GainExp:   int64(req.Times) * 2500,
+					GainCoins: int64(req.Times) * 12000,
+					Message:   "扫荡完成",
+				})
+				_ = protocol.WritePacket(srvConn, resPkt)
 			}
 		}
 	}()

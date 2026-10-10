@@ -60,8 +60,8 @@ func NewFengwanAuthenticator(opts ...FengwanOption) (*FengwanAuthenticator, erro
 			Jar:     jar,
 			Timeout: 15 * time.Second,
 		},
-		loginURL:   "http://member.fengwanyx.3fangyuan.com/login.php?goback=http://fengwanyx.3fangyuan.com",
-		enterURL:   "http://member.fengwanyx.com/game/game.php",
+		loginURL:   "http://member.fengwanyx.com/login.php?action=checkuser",
+		enterURL:   "http://member.fengwanyx.com/entergame.php",
 		defaultTTL: 90 * time.Minute,
 	}
 
@@ -83,17 +83,26 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		return nil, errors.New("fengwan: username and password cannot be empty")
 	}
 
-	// 1. 发起第一阶段平台登录验证 (POST login.php)
-	formData := url.Values{}
-	formData.Set("username", username)
-	formData.Set("password", password)
-	formData.Set("_fengwanyx_u_dl", "1")
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.loginURL, strings.NewReader(formData.Encode()))
+	// 1. 发起第一阶段平台登录验证 (支持线上 GET checkuser 与测试环境 POST form)
+	var (
+		req *http.Request
+		err error
+	)
+	if strings.Contains(a.loginURL, "action=checkuser") {
+		checkURL := fmt.Sprintf("%s&username=%s&password=%s", a.loginURL, url.QueryEscape(username), url.QueryEscape(password))
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
+	} else {
+		form := url.Values{}
+		form.Set("username", username)
+		form.Set("password", password)
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, a.loginURL, strings.NewReader(form.Encode()))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("fengwan: failed to create login request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	loginResp, err := a.client.Do(req)
@@ -106,17 +115,7 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		return nil, fmt.Errorf("fengwan: login returned http status %d", loginResp.StatusCode)
 	}
 
-	// 将第一阶段获取的凭据跨域注入至 member.fengwanyx.com
-	if a.client.Jar != nil {
-		if uLogin, err := url.Parse(a.loginURL); err == nil {
-			cookies := a.client.Jar.Cookies(uLogin)
-			if uMember, err := url.Parse("http://member.fengwanyx.com"); err == nil {
-				a.client.Jar.SetCookies(uMember, cookies)
-			}
-		}
-	}
-
-	// 2. 发起第二阶段请求 game.php，捕获 302 重定向至 login_api.php
+	// 2. 发起第二阶段请求 entergame.php，解析核心 iframe 或重定向 Location
 	serverSlug := extractServerSlug(serverID)
 	enterQuery := url.Values{}
 	enterQuery.Set("game", "sxd")
@@ -127,13 +126,6 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		enterFullURL = fmt.Sprintf("%s?%s", a.enterURL, enterQuery.Encode())
 	}
 
-	var redirectLocation string
-	redirectClient := *a.client
-	redirectClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		redirectLocation = req.URL.String()
-		return http.ErrUseLastResponse
-	}
-
 	enterReq, err := http.NewRequestWithContext(ctx, http.MethodGet, enterFullURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("fengwan: failed to create enter game request: %w", err)
@@ -141,41 +133,38 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 	enterReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	enterReq.Header.Set("Referer", fmt.Sprintf("http://member.fengwanyx.com/entergame.php?game=sxd&server=%s", serverSlug))
 
+	var redirectLocation string
+	redirectClient := *a.client
+	redirectClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		redirectLocation = req.URL.String()
+		return http.ErrUseLastResponse
+	}
+
 	enterResp, err := redirectClient.Do(enterReq)
 	if err != nil && !errors.Is(err, http.ErrUseLastResponse) {
 		return nil, fmt.Errorf("fengwan: enter game request failed: %w", err)
 	}
-	enterBodyBytes, _ := io.ReadAll(enterResp.Body)
-	_ = enterResp.Body.Close()
-	enterBodyStr := string(enterBodyBytes)
-
-	if redirectLocation == "" {
-		redirectLocation = enterResp.Header.Get("Location")
-	}
-
-	targetGatewayURL := redirectLocation
-	authCode := extractQueryParam(redirectLocation, "code")
-
-	// 3. 发起第三阶段：若重定向目标包含 login_api.php，访问该端点提取最终的双轨 Cookie 与会话票据
-	var cookies []*http.Cookie
-	cookies = append(cookies, enterResp.Cookies()...)
-
-	if redirectLocation != "" && strings.Contains(redirectLocation, "login_api.php") {
-		apiReq, err := http.NewRequestWithContext(ctx, http.MethodGet, redirectLocation, nil)
-		if err == nil {
-			apiReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-			apiResp, err := redirectClient.Do(apiReq)
-			if err == nil {
-				defer apiResp.Body.Close()
-				cookies = append(cookies, apiResp.Cookies()...)
-				if apiLoc := apiResp.Header.Get("Location"); apiLoc != "" && authCode == "" {
-					authCode = extractQueryParam(apiLoc, "code")
-				}
-			}
+	var enterBodyStr string
+	if enterResp != nil {
+		if redirectLocation == "" {
+			redirectLocation = enterResp.Header.Get("Location")
 		}
+		enterBodyBytes, _ := io.ReadAll(enterResp.Body)
+		_ = enterResp.Body.Close()
+		enterBodyStr = string(enterBodyBytes)
 	}
 
-	// 4. 从响应头与 CookieJar 中解析提取时间戳与哈希散列
+	targetGatewayURL := ""
+	authCode := ""
+	if redirectLocation != "" {
+		authCode = extractQueryParam(redirectLocation, "code")
+	}
+
+	var cookies []*http.Cookie
+	if enterResp != nil {
+		cookies = append(cookies, enterResp.Cookies()...)
+	}
+
 	nowUnix := int32(time.Now().Unix())
 	mainTicket := MainServerTicket{
 		Code: authCode,
@@ -185,60 +174,16 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		Time1: nowUnix,
 	}
 
-	// 检查重定向 URL Query 中是否带有时效凭证
-	if qTime := extractQueryParam(redirectLocation, "time"); qTime != "" {
-		if tVal, err := strconv.ParseInt(qTime, 10, 32); err == nil {
-			mainTicket.Time = int32(tVal)
-			crossTicket.Time1 = int32(tVal)
-		}
-	}
-	if qHash := extractQueryParam(redirectLocation, "hash"); qHash != "" {
-		mainTicket.Hash = qHash
-		crossTicket.Hash1 = qHash
-	}
-
-	// 5. 尝试从 HTML 或内嵌 iframe 解析直连游戏服 FlashVars
 	var roleName string
 	iframeTarget := ""
 	if mIframe := iframeRegex.FindStringSubmatch(enterBodyStr); len(mIframe) >= 2 {
 		iframeTarget = mIframe[1]
-	} else if redirectLocation != "" && !strings.Contains(redirectLocation, "login_api.php") {
-		reqPage, err := http.NewRequestWithContext(ctx, http.MethodGet, redirectLocation, nil)
-		if err == nil {
-			reqPage.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-			if respPage, err := a.client.Do(reqPage); err == nil {
-				defer respPage.Body.Close()
-				pBytes, _ := io.ReadAll(respPage.Body)
-				pStr := string(pBytes)
-				if mIf := iframeRegex.FindStringSubmatch(pStr); len(mIf) >= 2 {
-					iframeTarget = mIf[1]
-				} else {
-					ip, port, h, t, p := parseFlashVars(pStr)
-					if ip != "" && port != "" {
-						targetGatewayURL = fmt.Sprintf("%s:%s", ip, port)
-					}
-					if h != "" {
-						mainTicket.Hash = h
-						crossTicket.Hash1 = h
-					}
-					if t != "" {
-						if tv, err := strconv.ParseInt(t, 10, 32); err == nil {
-							mainTicket.Time = int32(tv)
-							crossTicket.Time1 = int32(tv)
-						}
-					}
-					if p != "" {
-						roleName = p
-						if mainTicket.Code == "" {
-							mainTicket.Code = p
-						}
-					}
-				}
-			}
-		}
 	}
 
 	if iframeTarget != "" {
+		if !strings.HasPrefix(iframeTarget, "http://") && !strings.HasPrefix(iframeTarget, "https://") {
+			iframeTarget = fmt.Sprintf("http://member.fengwanyx.com/%s", strings.TrimPrefix(iframeTarget, "/"))
+		}
 		if ifReq, err := http.NewRequestWithContext(ctx, http.MethodGet, iframeTarget, nil); err == nil {
 			ifReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 			if ifResp, err := a.client.Do(ifReq); err == nil {
@@ -250,12 +195,10 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 				}
 				if h != "" {
 					mainTicket.Hash = h
-					crossTicket.Hash1 = h
 				}
 				if t != "" {
 					if tv, err := strconv.ParseInt(t, 10, 32); err == nil {
 						mainTicket.Time = int32(tv)
-						crossTicket.Time1 = int32(tv)
 					}
 				}
 				if p != "" {
@@ -271,9 +214,6 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 	if a.client.Jar != nil {
 		if u, err := url.Parse(a.enterURL); err == nil {
 			cookies = append(cookies, a.client.Jar.Cookies(u)...)
-		}
-		if uRedir, err := url.Parse(redirectLocation); err == nil {
-			cookies = append(cookies, a.client.Jar.Cookies(uRedir)...)
 		}
 		for _, c := range a.extractAllCookies() {
 			cookies = append(cookies, c)
@@ -291,16 +231,14 @@ func (a *FengwanAuthenticator) Login(ctx context.Context, username, password, se
 		case strings.HasPrefix(name, "login_hash_sxd"):
 			crossTicket.Hash1 = val
 		case name == "_time" || name == "time":
-			if parsedTime, err := strconv.ParseInt(val, 10, 32); err == nil {
-				mainTicket.Time = int32(parsedTime)
-				if crossTicket.Time1 == nowUnix {
-					crossTicket.Time1 = int32(parsedTime)
+			if mainTicket.Time == nowUnix {
+				if parsedTime, err := strconv.ParseInt(val, 10, 32); err == nil {
+					mainTicket.Time = int32(parsedTime)
 				}
 			}
 		case name == "_hash" || name == "hash":
-			mainTicket.Hash = val
-			if crossTicket.Hash1 == "" {
-				crossTicket.Hash1 = val
+			if mainTicket.Hash == "" {
+				mainTicket.Hash = val
 			}
 		case name == "user" || name == "sxd_user":
 			if mainTicket.Code == "" {
@@ -355,7 +293,7 @@ func extractServerSlug(serverID string) string {
 
 var (
 	codeParamRegex  = regexp.MustCompile(`[?&]code=([^&#]+)`)
-	iframeRegex     = regexp.MustCompile(`iframe\s+src="([^"]+)"`)
+	iframeRegex     = regexp.MustCompile(`(?i)<iframe[^>]*\ssrc=["']([^"']+)["']`)
 	hashCodeRegex   = regexp.MustCompile(`[&?]hash_code=([a-f0-9]{32})`)
 	timeRegex       = regexp.MustCompile(`[&?]time=([0-9]+)`)
 	ipRegex         = regexp.MustCompile(`[&?]ip=([^&"'\s]+)`)

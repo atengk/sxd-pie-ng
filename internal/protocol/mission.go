@@ -18,8 +18,8 @@ const (
 	ActionPlayerInfo uint32 = 0x00000002
 	// ActionEnterTown 进入城镇协议号
 	ActionEnterTown uint32 = 0x00010000
-	// ActionMissionSweep 关卡副本扫荡请求与响应协议号
-	ActionMissionSweep uint32 = 0x00190001
+	// ActionMissionSweep 关卡副本扫荡请求与响应协议号 (Module 35, Action 2)
+	ActionMissionSweep uint32 = 0x00230002
 )
 
 var (
@@ -56,25 +56,30 @@ type SweepResult struct {
 // BuildSweepPacket 构造关卡扫荡二进制协议请求封包。
 func BuildSweepPacket(req SweepRequest) (*Packet, error) {
 	w := NewWriter()
-	w.WriteUint32(req.MissionID)
-	w.WriteUint16(req.Times)
+	// 真实网关二进制帧格式: [2B MissionID] + [1B Times] + [5B 扩展控制标记]
+	w.WriteUint16(uint16(req.MissionID))
+	w.WriteUint8(uint8(req.Times))
+	w.WriteBytes([]byte{0x00, 0x00, 0x23, 0x00, 0x00})
 	return NewPacket(ActionMissionSweep, w.Bytes()), nil
 }
 
 // ParseSweepRequest 从封包载荷中反序列化扫荡请求参数。
 func ParseSweepRequest(payload []byte) (*SweepRequest, error) {
+	if len(payload) < 3 {
+		return nil, fmt.Errorf("%w: payload too short", ErrInvalidPayload)
+	}
 	r := NewReader(payload)
-	missionID, err := r.ReadUint32()
+	missionID, err := r.ReadUint16()
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read mission_id: %v", ErrInvalidPayload, err)
 	}
-	times, err := r.ReadUint16()
+	times, err := r.ReadUint8()
 	if err != nil {
 		return nil, fmt.Errorf("%w: failed to read times: %v", ErrInvalidPayload, err)
 	}
 	return &SweepRequest{
-		MissionID: missionID,
-		Times:     times,
+		MissionID: uint32(missionID),
+		Times:     uint16(times),
 	}, nil
 }
 
@@ -83,7 +88,7 @@ func BuildSweepResultPacket(res SweepResult) (*Packet, error) {
 	w := NewWriter()
 	var successFlag uint8
 	if res.Success {
-		successFlag = 1
+		successFlag = 0x03 // 真实网关成功标识码 0x03
 	}
 	w.WriteUint8(successFlag)
 	w.WriteUint32(res.MissionID)
@@ -98,45 +103,50 @@ func BuildSweepResultPacket(res SweepResult) (*Packet, error) {
 
 // ParseSweepResult 从响应封包载荷中反序列化扫荡结果。
 func ParseSweepResult(payload []byte) (*SweepResult, error) {
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("%w: empty sweep payload", ErrInvalidPayload)
+	}
 	r := NewReader(payload)
 	flag, err := r.ReadUint8()
 	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read success flag: %v", ErrInvalidPayload, err)
-	}
-	missionID, err := r.ReadUint32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read mission_id: %v", ErrInvalidPayload, err)
-	}
-	times, err := r.ReadUint16()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read times: %v", ErrInvalidPayload, err)
-	}
-	costPower, err := r.ReadInt32()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read cost_power: %v", ErrInvalidPayload, err)
-	}
-	gainExp, err := r.ReadInt64()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read gain_exp: %v", ErrInvalidPayload, err)
-	}
-	gainCoins, err := r.ReadInt64()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read gain_coins: %v", ErrInvalidPayload, err)
-	}
-	msg, err := r.ReadString()
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to read message: %v", ErrInvalidPayload, err)
+		return nil, fmt.Errorf("%w: failed to read status flag: %v", ErrInvalidPayload, err)
 	}
 
-	return &SweepResult{
-		Success:   flag == 1,
-		MissionID: missionID,
-		Times:     times,
-		CostPower: int(costPower),
-		GainExp:   gainExp,
-		GainCoins: gainCoins,
-		Message:   msg,
-	}, nil
+	// 真实网关短帧协议兼容: 首字节为 0x03 或 0x01 表示成功
+	isSuccess := flag == 0x03 || flag == 0x01
+	res := &SweepResult{
+		Success: isSuccess,
+		Message: "扫荡完成",
+	}
+
+	// 若载荷为完整长包 (测试桩或带元数据的回包) 则继续深度反序列化
+	if r.Remaining() >= 30 {
+		if mid, err := r.ReadUint32(); err == nil {
+			res.MissionID = mid
+		}
+		if times, err := r.ReadUint16(); err == nil {
+			res.Times = times
+		}
+		if costPower, err := r.ReadInt32(); err == nil {
+			res.CostPower = int(costPower)
+		}
+		if gainExp, err := r.ReadInt64(); err == nil {
+			res.GainExp = gainExp
+		}
+		if gainCoins, err := r.ReadInt64(); err == nil {
+			res.GainCoins = gainCoins
+		}
+		if msg, err := r.ReadString(); err == nil && msg != "" {
+			res.Message = msg
+		}
+	} else if r.Remaining() >= 4 {
+		// 真实 5 字节短帧回包: 携带剩余次数或消耗
+		if v, err := r.ReadInt32(); err == nil {
+			res.CostPower = int(v)
+		}
+	}
+
+	return res, nil
 }
 
 // BuildLoginPacket 构造角色登录握手协议封包。

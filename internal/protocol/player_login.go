@@ -70,7 +70,7 @@ func BuildPlayerLoginPacket(req PlayerLoginRequest) (*Packet, error) {
 	if req.Source == "" {
 		req.Source = "sxd_baidu_pinpai_bt"
 	}
-	if req.Platform == "" {
+	if req.Platform == "" || req.Platform == "fengwan" {
 		req.Platform = "疯玩"
 	}
 	if req.ClientType == "" {

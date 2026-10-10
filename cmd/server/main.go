@@ -291,12 +291,15 @@ func run(ctx context.Context, args []string) error {
 					slog.Warn("原生平台换票未成功，尝试备用降级通道", "error", err)
 				} else {
 					client.ApplyTicket(&roleCfg, ticket)
-					slog.Info("已成功全自动换取最新双轨凭据并直注会话", "server_id", roleCfg.ServerID, "role_name", role.RoleName)
+					if ticket.GatewayURL != "" {
+						roleCfg.ServerAddr = ticket.GatewayURL
+					}
+					slog.Info("已成功全自动换取最新双轨凭据并直注会话", "server_id", roleCfg.ServerID, "role_name", role.RoleName, "server_addr", roleCfg.ServerAddr)
 				}
 			}
 
-			// 备用降级通道: 若仍未就绪，尝试从外部 user.ini 摄取
-			if roleCfg.Time1 == 0 || roleCfg.Hash1 == "" {
+			// 备用降级通道: 仅当原生平台换票未成功 (主服 Hash 缺失) 时，才尝试从外部 user.ini 摄取
+			if roleCfg.Hash == "" {
 				if ticket, err := platform.LoadTicketFromIni("", role.RoleName); err == nil {
 					client.ApplyTicket(&roleCfg, ticket)
 					slog.Info("已通过备用 Ticket Ingress 成功摄取本地凭据", "role_name", role.RoleName, "server_id", roleCfg.ServerID)

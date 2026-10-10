@@ -138,6 +138,16 @@ func (s *RoleScheduler) runLoop() {
 			}
 		}
 
+		// 零假动作铁律：会话未处于 StateActive 激活态时严禁触发业务 Routine
+		if s.session != nil && s.session.State() != client.StateActive {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+				continue
+			}
+		}
+
 		// 动作前强制注入拟人防封抖动延迟
 		if err := s.jitter.Wait(s.ctx); err != nil {
 			return
