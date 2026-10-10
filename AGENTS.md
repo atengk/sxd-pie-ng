@@ -1,19 +1,27 @@
 # 工程 Agent 协作规范 (Engineering Agent Guidelines)
 
+## Core specifications
+
+开发具体业务模块前，按触发条件查阅对应规范：
+
+- **网络协议与编解码**：实现二进制封包、流式解压或报文单测时，查阅 [docs/protocol-spec.md](./docs/protocol-spec.md)。
+- **元数据与数据字典**：操作 `data/Pieb.db` 静态表结构或 SQLite 仓储时，查阅 [docs/database-dictionary.md](./docs/database-dictionary.md)。
+- **自动化玩法与调度**：实现 Routine 任务生命周期、卫语句、智能熔断与拟人抖动时，查阅 [docs/routine-spec.md](./docs/routine-spec.md)。
+
 ## Agent skills
 
 ### Issue tracker
 
-本项目的任务、需求与缺陷统一通过 GitHub Issues 进行跟踪与管理，使用 `gh` 命令行工具驱动。参见 [docs/agents/issue-tracker.md](./docs/agents/issue-tracker.md)。
+操作任务、缺陷或运行 `gh` 命令时，统一通过 GitHub Issues 驱动。参见 [docs/agents/issue-tracker.md](./docs/agents/issue-tracker.md)。
 
 ### Triage labels
 
-采用标准的五大核心分诊角色标签体系（`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`）。参见 [docs/agents/triage-labels.md](./docs/agents/triage-labels.md)。
+分诊或流转 Issue/PR 状态时，遵循标准五大角色标签体系。参见 [docs/agents/triage-labels.md](./docs/agents/triage-labels.md)。
 
 ### Domain docs
 
-采用单上下文（single-context）文档布局，通过根目录 `CONTEXT.md` 与 `docs/adr/` 维护领域术语与架构决策。参见 [docs/agents/domain.md](./docs/agents/domain.md)。
+命名领域实体或评估方案冲突时，遵循单上下文（single-context）规范，查阅 [CONTEXT.md](./CONTEXT.md) 与 [docs/adr/](./docs/adr/)。流程参见 [docs/agents/domain.md](./docs/agents/domain.md)。
 
 ### Architectural recon
 
-当功能未生效、行为异常或实现逻辑存疑时，使用 REA MCP 工具（或 [reverse-engineer-anything](./.agents/skills/reverse-engineer-anything/SKILL.md) 技能）对 `C:\software\疯玩神仙道\pie.exe` 及其关联组件进行架构侦察，以原版程序为事实基准（Ground Truth）进行逆向分析与行为对齐。
+行为异常、协议未明或实现存疑时，以原版 `C:\software\疯玩神仙道\pie.exe` 为基准事实（Ground Truth），使用 REA MCP 工具或 [reverse-engineer-anything](./.agents/skills/reverse-engineer-anything/SKILL.md) 技能进行逆向分析与行为对齐，已有成果参见 [docs/research/](./docs/research/)。

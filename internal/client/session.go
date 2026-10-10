@@ -772,6 +772,7 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 			return
 		}
 
+		slog.Info("收到网关回包", "action_id", fmt.Sprintf("0x%08X (Mod %d, Act %d)", pkt.ActionID, pkt.ActionID>>16, pkt.ActionID&0xFFFF), "payload_len", len(pkt.Payload))
 		s.dispatchPacket(pkt)
 	}
 }

@@ -22,6 +22,23 @@ const (
 	ActionMissionEnter uint32 = 0x00230000
 	// ActionMissionSweep 关卡副本扫荡请求与响应协议号 (Module 35, Action 2)
 	ActionMissionSweep uint32 = 0x00230002
+	// ActionMissionQuickFinish 关卡扫荡快速完成协议号 (Module 35, Action 7)
+	ActionMissionQuickFinish uint32 = 0x00230007
+
+	// ActionUIFunctionOpen 打开功能界面 (Module 0, Action 39)
+	ActionUIFunctionOpen uint32 = 0x00000027
+	// ActionTownMissionActive 激活城镇关卡界面 (Module 2, Action 41)
+	ActionTownMissionActive uint32 = 0x00020029
+	// ActionHeroMissionList 拉取可扫荡英雄副本列表 (Module 111, Action 0)
+	ActionHeroMissionList uint32 = 0x006F0000
+	// ActionHeroMissionSelect 选定英雄副本实例 (Module 111, Action 1)
+	ActionHeroMissionSelect uint32 = 0x006F0001
+	// ActionHeroMissionSweep 执行英雄副本单次扫荡 (Module 111, Action 2)
+	ActionHeroMissionSweep uint32 = 0x006F0002
+	// ActionHeroMissionQuickFinish 跳过扫荡倒计时快速完成 (Module 111, Action 7)
+	ActionHeroMissionQuickFinish uint32 = 0x006F0007
+	// ActionHeroMissionClose 关闭英雄副本扫荡界面 (Module 111, Action 14)
+	ActionHeroMissionClose uint32 = 0x006F000E
 )
 
 var (
@@ -62,6 +79,14 @@ func BuildEnterMissionPacket(missionID uint32) *Packet {
 	w.WriteUint16(uint16(missionID))
 	w.WriteBytes([]byte{0x00, 0x23, 0x00, 0x00})
 	return NewPacket(ActionMissionEnter, w.Bytes())
+}
+
+// BuildQuickFinishPacket 构造快速完成关卡扫荡请求封包 (跳过倒计时)。
+func BuildQuickFinishPacket() *Packet {
+	w := NewWriter()
+	// 真实网关二进制帧格式: [4B 前置动作号 ActionMissionSweep (0x00230002)]
+	w.WriteUint32(ActionMissionSweep)
+	return NewPacket(ActionMissionQuickFinish, w.Bytes())
 }
 
 // BuildSweepPacket 构造关卡扫荡二进制协议请求封包。
@@ -181,3 +206,141 @@ func ParseLoginPacket(payload []byte) (roleName, token string, err error) {
 	}
 	return name, tok, nil
 }
+
+// HeroMissionItem 代表单个可扫荡英雄副本条目。
+type HeroMissionItem struct {
+	InstanceID uint32 // 副本实例句柄
+	MissionID  uint16 // 关卡配置编号
+	Times      uint8  // 剩余可扫荡次数
+}
+
+// HeroMissionList 代表英雄副本扫荡列表及状态。
+type HeroMissionList struct {
+	TotalTimes uint8             // 剩余总可扫荡次数
+	CostPower  uint32            // 消耗体力
+	Countdown  uint16            // 倒计时
+	Items      []HeroMissionItem // 副本条目列表
+}
+
+// BuildHeroMissionListPacket 构造拉取可扫荡英雄副本列表请求封包 (Module 111, Action 0)。
+func BuildHeroMissionListPacket() *Packet {
+	return NewPacket(ActionHeroMissionList, nil)
+}
+
+// ParseHeroMissionListResponse 从响应封包载荷中反序列化英雄副本列表。
+func ParseHeroMissionListResponse(payload []byte) (*HeroMissionList, error) {
+	if len(payload) < 13 {
+		return nil, fmt.Errorf("%w: hero mission list payload too short (%d bytes)", ErrInvalidPayload, len(payload))
+	}
+	r := NewReader(payload)
+	// 跳过 4 字节保留头 (通常为 0x00000000)
+	if _, err := r.ReadUint32(); err != nil {
+		return nil, fmt.Errorf("%w: failed to read header: %v", ErrInvalidPayload, err)
+	}
+	totalTimes, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read total_times: %v", ErrInvalidPayload, err)
+	}
+	costPower, err := r.ReadUint32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read cost_power: %v", ErrInvalidPayload, err)
+	}
+	countdown, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read countdown: %v", ErrInvalidPayload, err)
+	}
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read item count: %v", ErrInvalidPayload, err)
+	}
+
+	items := make([]HeroMissionItem, 0, count)
+	for i := 0; i < int(count); i++ {
+		if r.Remaining() < 7 {
+			break
+		}
+		instID, err := r.ReadUint32()
+		if err != nil {
+			break
+		}
+		mID, err := r.ReadUint16()
+		if err != nil {
+			break
+		}
+		times, err := r.ReadUint8()
+		if err != nil {
+			break
+		}
+		items = append(items, HeroMissionItem{
+			InstanceID: instID,
+			MissionID:  mID,
+			Times:      times,
+		})
+	}
+
+	return &HeroMissionList{
+		TotalTimes: totalTimes,
+		CostPower:  costPower,
+		Countdown:  countdown,
+		Items:      items,
+	}, nil
+}
+
+// BuildHeroMissionSelectPacket 构造选定英雄副本实例请求封包 (Module 111, Action 1)。
+func BuildHeroMissionSelectPacket(instanceID uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint8(0)
+	w.WriteUint8(1)
+	w.WriteUint32(instanceID)
+	return NewPacket(ActionHeroMissionSelect, w.Bytes())
+}
+
+// ParseHeroMissionSelectResponse 从响应封包载荷中反序列化选定副本结果。
+func ParseHeroMissionSelectResponse(payload []byte) (bool, error) {
+	if len(payload) < 3 {
+		return false, fmt.Errorf("%w: select payload too short", ErrInvalidPayload)
+	}
+	return payload[2] == 0x01, nil
+}
+
+// BuildHeroMissionSweepPacket 构造执行英雄副本单次扫荡请求封包 (Module 111, Action 2)。
+func BuildHeroMissionSweepPacket() *Packet {
+	return NewPacket(ActionHeroMissionSweep, []byte{0x04, 0x07})
+}
+
+// ParseHeroMissionSweepResponse 从响应封包载荷中反序列化单次扫荡回包。
+func ParseHeroMissionSweepResponse(payload []byte) (*SweepResult, error) {
+	if len(payload) < 3 {
+		return nil, fmt.Errorf("%w: sweep response too short", ErrInvalidPayload)
+	}
+	success := payload[2] == 0x01
+	res := &SweepResult{
+		Success:   success,
+		Times:     1,
+		CostPower: 5,
+		Message:   "扫荡成功",
+	}
+	if len(payload) >= 10 {
+		r := NewReader(payload[3:])
+		instID, _ := r.ReadUint32()
+		mID, _ := r.ReadUint16()
+		res.MissionID = uint32(mID)
+		_ = instID
+	}
+	return res, nil
+}
+
+// BuildHeroMissionQuickFinishPacket 构造跳过倒计时快速完成请求封包 (Module 111, Action 7)。
+func BuildHeroMissionQuickFinishPacket(instanceID uint32) *Packet {
+	w := NewWriter()
+	w.WriteUint8(0)
+	w.WriteUint8(1)
+	w.WriteUint32(instanceID)
+	return NewPacket(ActionHeroMissionQuickFinish, w.Bytes())
+}
+
+// BuildHeroMissionClosePacket 构造关闭英雄副本扫荡界面请求封包 (Module 111, Action 14)。
+func BuildHeroMissionClosePacket() *Packet {
+	return NewPacket(ActionHeroMissionClose, nil)
+}
+

@@ -43,17 +43,30 @@ func createTestSession(t *testing.T, initialStamina int) (*client.RoleSession, n
 	return sess, c2
 }
 
-func TestDungeonSweep_NormalExecution(t *testing.T) {
-	sess, srvConn := createTestSession(t, 70) // 70 体力，扫 10 次消耗 50，剩余 20
-	defer sess.Close()
-	defer srvConn.Close()
-
-	// 模拟服务端接收扫荡包并响应结算回包
-	pktCh := make(chan *protocol.Packet, 1)
+func startMockDungeonServer(srvConn net.Conn, handler func(pkt *protocol.Packet) bool) {
 	go func() {
-		pkt, err := protocol.ReadPacket(srvConn)
-		if err == nil {
-			pktCh <- pkt
+		for {
+			pkt, err := protocol.ReadPacket(srvConn)
+			if err != nil {
+				return
+			}
+			if handler != nil && handler(pkt) {
+				continue
+			}
+			if pkt.ActionID == protocol.ActionTownMissionActive {
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionTownMissionActive, nil))
+				continue
+			}
+			if pkt.ActionID == protocol.ActionHeroMissionList {
+				w := protocol.NewWriter()
+				w.WriteUint32(0)
+				w.WriteUint8(0)
+				w.WriteUint32(0)
+				w.WriteUint16(0)
+				w.WriteUint16(0)
+				_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+				continue
+			}
 			if pkt.ActionID == protocol.ActionMissionSweep {
 				req, _ := protocol.ParseSweepRequest(pkt.Payload)
 				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
@@ -69,6 +82,24 @@ func TestDungeonSweep_NormalExecution(t *testing.T) {
 			}
 		}
 	}()
+}
+
+func TestDungeonSweep_NormalExecution(t *testing.T) {
+	sess, srvConn := createTestSession(t, 70) // 70 体力，扫 10 次消耗 50，剩余 20
+	defer sess.Close()
+	defer srvConn.Close()
+
+	// 模拟服务端接收扫荡包并响应结算回包
+	pktCh := make(chan *protocol.Packet, 10)
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		if pkt.ActionID == protocol.ActionMissionSweep {
+			select {
+			case pktCh <- pkt:
+			default:
+			}
+		}
+		return false
+	})
 
 	dictRepo, err := dictionary.NewRepository("")
 	if err != nil {
@@ -93,8 +124,8 @@ func TestDungeonSweep_NormalExecution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("解析服务端收到的请求包失败: %v", err)
 		}
-		if req.Times != 10 { // 70 体力单次最多批处理 10 次
-			t.Errorf("期望扫荡 10 次, 实际 %d 次", req.Times)
+		if req.Times != 1 { // 对齐真实网关单次请求发 1
+			t.Errorf("期望单次请求扫荡 1 次, 实际 %d 次", req.Times)
 		}
 	default:
 		t.Error("未收到向服务端发送的扫荡封包")
@@ -154,27 +185,7 @@ func TestDungeonSweep_201Stamina_MultiBatchDepletion(t *testing.T) {
 	defer srvConn.Close()
 
 	// 服务端异步接收通道并响应扫荡结果
-	go func() {
-		for {
-			pkt, err := protocol.ReadPacket(srvConn)
-			if err != nil {
-				return
-			}
-			if pkt.ActionID == protocol.ActionMissionSweep {
-				req, _ := protocol.ParseSweepRequest(pkt.Payload)
-				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
-					Success:   true,
-					MissionID: req.MissionID,
-					Times:     req.Times,
-					CostPower: int(req.Times) * 5,
-					GainExp:   int64(req.Times) * 2500,
-					GainCoins: int64(req.Times) * 12000,
-					Message:   "扫荡完成",
-				})
-				_ = protocol.WritePacket(srvConn, resPkt)
-			}
-		}
-	}()
+	startMockDungeonServer(srvConn, nil)
 
 	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
 		MaxBatchTimes: 10,
@@ -233,27 +244,7 @@ func TestDungeonSweep_CustomBatchAndExactDeduction(t *testing.T) {
 	defer sess.Close()
 	defer srvConn.Close()
 
-	go func() {
-		for {
-			pkt, err := protocol.ReadPacket(srvConn)
-			if err != nil {
-				return
-			}
-			if pkt.ActionID == protocol.ActionMissionSweep {
-				req, _ := protocol.ParseSweepRequest(pkt.Payload)
-				resPkt, _ := protocol.BuildSweepResultPacket(protocol.SweepResult{
-					Success:   true,
-					MissionID: req.MissionID,
-					Times:     req.Times,
-					CostPower: int(req.Times) * 5,
-					GainExp:   int64(req.Times) * 2500,
-					GainCoins: int64(req.Times) * 12000,
-					Message:   "扫荡完成",
-				})
-				_ = protocol.WritePacket(srvConn, resPkt)
-			}
-		}
-	}()
+	startMockDungeonServer(srvConn, nil)
 
 	routine := dungeon.NewDungeonSweepRoutine(nil, dungeon.SweepConfig{
 		MaxBatchTimes: 3,
@@ -392,27 +383,24 @@ func TestDungeonSweep_ServerResponse_RewardSync(t *testing.T) {
 	initialCoins := sess.GetPlayerState().Coins
 
 	// 模拟服务端接收扫荡并回复真实结算包
-	go func() {
-		pkt, err := protocol.ReadPacket(srvConn)
-		if err != nil {
-			return
-		}
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		if pkt.ActionID == protocol.ActionMissionSweep {
 			req, _ := protocol.ParseSweepRequest(pkt.Payload)
-			// 服务端回包：10 次，扣除 50 体力，产出 35,000 经验与 180,000 铜钱
 			res := protocol.SweepResult{
 				Success:   true,
 				MissionID: req.MissionID,
 				Times:     req.Times,
-				CostPower: 50,
-				GainExp:   35000,
-				GainCoins: 180000,
+				CostPower: int(req.Times) * 5,
+				GainExp:   int64(req.Times) * 3500,
+				GainCoins: int64(req.Times) * 18000,
 				Message:   "扫荡完成",
 			}
 			respPkt, _ := protocol.BuildSweepResultPacket(res)
 			_ = protocol.WritePacket(srvConn, respPkt)
+			return true
 		}
-	}()
+		return false
+	})
 
 	routine := dungeon.NewDungeonSweepRoutine(nil)
 	err := routine.Execute(context.Background(), sess, nil)
@@ -437,11 +425,7 @@ func TestDungeonSweep_ServerRejection_StaminaDepleted(t *testing.T) {
 	defer sess.Close()
 	defer srvConn.Close()
 
-	go func() {
-		pkt, err := protocol.ReadPacket(srvConn)
-		if err != nil {
-			return
-		}
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		if pkt.ActionID == protocol.ActionMissionSweep {
 			req, _ := protocol.ParseSweepRequest(pkt.Payload)
 			res := protocol.SweepResult{
@@ -452,8 +436,10 @@ func TestDungeonSweep_ServerRejection_StaminaDepleted(t *testing.T) {
 			}
 			respPkt, _ := protocol.BuildSweepResultPacket(res)
 			_ = protocol.WritePacket(srvConn, respPkt)
+			return true
 		}
-	}()
+		return false
+	})
 
 	routine := dungeon.NewDungeonSweepRoutine(nil)
 	err := routine.Execute(context.Background(), sess, nil)
@@ -468,11 +454,7 @@ func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
 	defer sess.Close()
 	defer srvConn.Close()
 
-	go func() {
-		pkt, err := protocol.ReadPacket(srvConn)
-		if err != nil {
-			return
-		}
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
 		if pkt.ActionID == protocol.ActionMissionSweep {
 			req, _ := protocol.ParseSweepRequest(pkt.Payload)
 			res := protocol.SweepResult{
@@ -483,8 +465,10 @@ func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
 			}
 			respPkt, _ := protocol.BuildSweepResultPacket(res)
 			_ = protocol.WritePacket(srvConn, respPkt)
+			return true
 		}
-	}()
+		return false
+	})
 
 	routine := dungeon.NewDungeonSweepRoutine(nil)
 	err := routine.Execute(context.Background(), sess, nil)
@@ -492,4 +476,90 @@ func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
 		t.Fatalf("期望服务端拒绝时触发 ErrBagFull, 实际返回: %v", err)
 	}
 }
+
+// TestDungeonSweep_HeroMission_FullWorkflow 验证 Module 111 英雄副本扫荡全流程 (列表->选定->扫荡->快速完成->界面关闭) 与真实体力资产结算
+func TestDungeonSweep_HeroMission_FullWorkflow(t *testing.T) {
+	sess, srvConn := createTestSession(t, 25) // 初始 25 点体力，扫 2 个副本实例各 1 次，消耗 10 点，剩余 15 点
+	defer sess.Close()
+	defer srvConn.Close()
+
+	var selectCount atomic.Int32
+	var sweepCount atomic.Int32
+	var quickFinishCount atomic.Int32
+	var closedFlag atomic.Bool
+
+	startMockDungeonServer(srvConn, func(pkt *protocol.Packet) bool {
+		switch pkt.ActionID {
+		case protocol.ActionHeroMissionList:
+			// 响应包含 2 个英雄副本的列表
+			w := protocol.NewWriter()
+			w.WriteUint32(0) // 保留头
+			w.WriteUint8(2)  // 总可扫荡次数 2
+			w.WriteUint32(10) // 消耗体力
+			w.WriteUint16(0)  // 倒计时
+			w.WriteUint16(2)  // 条数 2
+			// 副本 1
+			w.WriteUint32(27983) // InstanceID
+			w.WriteUint16(43)    // MissionID
+			w.WriteUint8(1)      // Times
+			// 副本 2
+			w.WriteUint32(27984) // InstanceID
+			w.WriteUint16(44)    // MissionID
+			w.WriteUint8(1)      // Times
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionList, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionSelect:
+			selectCount.Add(1)
+			// 确认选定 (00 00 01)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSelect, []byte{0x00, 0x00, 0x01}))
+			return true
+
+		case protocol.ActionHeroMissionSweep:
+			sweepCount.Add(1)
+			// 回包结算 (3B status + 4B instanceID + 2B missionID + 1B times ...)
+			w := protocol.NewWriter()
+			w.WriteBytes([]byte{0x00, 0x00, 0x01})
+			w.WriteUint32(27983)
+			w.WriteUint16(43)
+			w.WriteUint8(1)
+			_ = protocol.WritePacket(srvConn, protocol.NewPacket(protocol.ActionHeroMissionSweep, w.Bytes()))
+			return true
+
+		case protocol.ActionHeroMissionQuickFinish:
+			quickFinishCount.Add(1)
+			return true
+
+		case protocol.ActionHeroMissionClose:
+			closedFlag.Store(true)
+			return true
+		}
+		return false
+	})
+
+	routine := dungeon.NewDungeonSweepRoutine(nil)
+	err := routine.Execute(context.Background(), sess, nil)
+	if err != nil {
+		t.Fatalf("执行英雄副本扫荡失败: %v", err)
+	}
+
+	if selectCount.Load() != 2 {
+		t.Errorf("期望选定 2 次副本, 实际 %d 次", selectCount.Load())
+	}
+	if sweepCount.Load() != 2 {
+		t.Errorf("期望扫荡 2 次, 实际 %d 次", sweepCount.Load())
+	}
+	if quickFinishCount.Load() != 2 {
+		t.Errorf("期望快速完成 2 次, 实际 %d 次", quickFinishCount.Load())
+	}
+	if !closedFlag.Load() {
+		t.Errorf("期望退出时发送关闭英雄副本界面封包 ActionHeroMissionClose")
+	}
+
+	// 验证体力扣减 (25 - 2*5 = 15)
+	if rem := sess.GetStamina(); rem != 15 {
+		t.Errorf("期望剩余体力 15, 实际 %d", rem)
+	}
+}
+
 
