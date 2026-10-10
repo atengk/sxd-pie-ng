@@ -24,6 +24,9 @@ const goldenCase2LoginRespHex = "0000001a0000000000000000040a0000000000000000010
 const goldenCase3InitStep1ReqHex = "000000080000004800000000"
 const goldenCase3InitStep1RespHex = "00000012000000480000130f00020000130f00001312"
 
+// Golden Case 4: 角色全量资产快照响应包 (147 字节 zlib 压缩) - 采样自 sxd.pcapng Frame 17 (49.232.196.100:8381 -> 192.168.3.6)
+const goldenCase4GetInfoRespHex = "0000008f789c6360606062e07cb668d9931d0d4fe7ec626060d461609865cec0c0c0913f79cd0f0610e8e1ba08a1f96742e421e03f140099331930012b946604620520f58719c8d067787ce00190d60262392036822a3262a838bcbd908149eb1b88c7c5a010fa99417085150303675a6a5e7a79625e6505031f9c195f6c61680cd5a9cf00f20183f43ba855600000c4182a72"
+
 // TestGolden_Case1_PlayerLoginRequest 验证客户端登录请求包与抓包 116 字节逐字节完全对齐
 func TestGolden_Case1_PlayerLoginRequest(t *testing.T) {
 	expectedBytes, err := hex.DecodeString(goldenCase1LoginReqHex)
@@ -265,5 +268,44 @@ func TestGolden_Zlib_DecompressAndSelfHealing(t *testing.T) {
 	passThrough, err := protocol.DecompressIfNeeded(rawNonZlib)
 	if err != nil || !bytes.Equal(passThrough, rawNonZlib) {
 		t.Fatalf("非 zlib 载荷透传失败: %v", err)
+	}
+}
+
+// TestGolden_Case4_PlayerGetInfoResponse 验证真实抓包 147 字节 zlib 压缩全量资产快照的透明解压与字段反序列化
+func TestGolden_Case4_PlayerGetInfoResponse(t *testing.T) {
+	expectedBytes, err := hex.DecodeString(goldenCase4GetInfoRespHex)
+	if err != nil {
+		t.Fatalf("解码 Golden Case 4 Hex 失败: %v", err)
+	}
+	if len(expectedBytes) != 147 {
+		t.Fatalf("Golden Case 4 期望 147 字节, 实际 %d 字节", len(expectedBytes))
+	}
+
+	// 1. 测试整包透明解压与 ActionIDPlayerGetInfo 还原
+	pkt, err := protocol.Unmarshal(expectedBytes)
+	if err != nil {
+		t.Fatalf("Unmarshal Golden Case 4 失败: %v", err)
+	}
+	if pkt.ActionID != protocol.ActionIDPlayerGetInfo {
+		t.Errorf("期望 ActionID 0x00000002 (ActionIDPlayerGetInfo), 实际 0x%08X", pkt.ActionID)
+	}
+
+	// 2. 验证角色资产反序列化 (角色名: 梦一场, 等级: 300, 铜钱: 36226117234, 元宝: 39409/39479)
+	res, err := protocol.ParsePlayerLoginResult(pkt.Payload)
+	if err != nil {
+		t.Fatalf("ParsePlayerLoginResult 解析资产失败: %v", err)
+	}
+
+	if res.RoleName != "梦一场" {
+		t.Errorf("期望角色名 '梦一场', 实际 '%s'", res.RoleName)
+	}
+	if res.Level != 300 {
+		t.Errorf("期望角色等级 300, 实际 %d", res.Level)
+	}
+	if res.Coins != 36231687416 {
+		t.Errorf("期望角色铜钱 36231687416, 实际 %d", res.Coins)
+	}
+	if res.Ingots != 39479 {
+		t.Errorf("期望角色元宝 39479, 实际 %d", res.Ingots)
 	}
 }

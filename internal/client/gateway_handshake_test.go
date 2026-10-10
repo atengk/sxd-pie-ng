@@ -19,8 +19,11 @@ import (
 // TestRoleSession_DefaultGatewayHandshake_FullFlow 验证通过 net.Pipe 模拟真实网关：
 // 1. 发送 Module 0, Action 0 登录请求
 // 2. 接收并校验 ResultCode=4 认证成功回包
-// 3. 自动触发 Action 72 (TownID=4879) 与 Action 99 城镇场景初始化
-// 4. 成功流转至 StateActive 并在激活态维持心跳保活
+// 3. 自动触发 Action 72 (TownID=4879) 城镇场景初始化步 1
+// 4. 自动触发 Action 99 场景进阶同步步 2
+// 5. 自动触发 ActionIDPlayerInitStep3 (0x00A50000) 扩展模块初始化步 3
+// 6. 自动触发 ActionIDPlayerGetInfo (0x00000002) 全量资产拉取步 4 (Golden Case 4 147B zlib 压缩包)
+// 7. 成功流转至 StateActive、资产更新至真实快照并在激活态维持心跳保活
 func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 
@@ -28,6 +31,8 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 	resp2Payload, _ := hex.DecodeString(goldenRespCase2Hex)
 	const goldenRespCase3Hex = "0000130f00020000130f00001312"
 	resp3Payload, _ := hex.DecodeString(goldenRespCase3Hex)
+	const goldenCase4Hex = "0000008f789c6360606062e07cb668d9931d0d4fe7ec626060d461609865cec0c0c0913f79cd0f0610e8e1ba08a1f96742e421e03f140099331930012b946604620520f58719c8d067787ce00190d60262392036822a3262a838bcbd908149eb1b88c7c5a010fa99417085150303675a6a5e7a79625e6505031f9c195f6c61680cd5a9cf00f20183f43ba855600000c4182a72"
+	case4Bytes, _ := hex.DecodeString(goldenCase4Hex)
 
 	var serverWg sync.WaitGroup
 	serverWg.Add(1)
@@ -35,6 +40,8 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 	receivedLogin := make(chan bool, 1)
 	receivedStep1 := make(chan bool, 1)
 	receivedStep2 := make(chan bool, 1)
+	receivedStep3 := make(chan bool, 1)
+	receivedStep4 := make(chan bool, 1)
 	receivedHeartbeat := make(chan bool, 2)
 
 	// 模拟远程游戏网关
@@ -66,6 +73,17 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 				// 回复 Step2 确认
 				resp := protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00})
 				_ = protocol.WritePacket(serverConn, resp)
+
+			case protocol.ActionIDPlayerInitStep3:
+				receivedStep3 <- true
+				// 回复 Step3 确认
+				resp := protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8))
+				_ = protocol.WritePacket(serverConn, resp)
+
+			case protocol.ActionIDPlayerGetInfo:
+				receivedStep4 <- true
+				// 回复 Golden Case 4 (整包 147 字节 zlib 压缩资产包)
+				_, _ = serverConn.Write(case4Bytes)
 
 			case protocol.ActionHeartbeat:
 				select {
@@ -122,7 +140,21 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 		t.Fatal("超时未收到客户端场景同步包 (ActionIDPlayerInitStep2)")
 	}
 
-	// 4. 等待会话成功激活
+	// 4. 验证接收到 ActionIDPlayerInitStep3 扩展模块初始化步 3
+	select {
+	case <-receivedStep3:
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时未收到客户端扩展模块同步包 (ActionIDPlayerInitStep3)")
+	}
+
+	// 5. 验证接收到 ActionIDPlayerGetInfo 全量资产获取步 4
+	select {
+	case <-receivedStep4:
+	case <-time.After(2 * time.Second):
+		t.Fatal("超时未收到客户端资产拉取包 (ActionIDPlayerGetInfo)")
+	}
+
+	// 6. 等待会话成功激活
 	activeTimeout := time.After(2 * time.Second)
 	for session.State() != client.StateActive {
 		select {
@@ -132,13 +164,22 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 		}
 	}
 
-	// 5. 校验 TownID 已同步更新为 4879
+	// 7. 校验 TownID 与真实全量资产快照已更新
 	state := session.GetPlayerState()
 	if state.TownID != 4879 {
 		t.Errorf("期望角色当前 TownID 为 4879, 实际为 %d", state.TownID)
 	}
+	if state.Level != 300 {
+		t.Errorf("期望角色等级同步为 300, 实际为 %d", state.Level)
+	}
+	if state.Coins != 36231687416 {
+		t.Errorf("期望角色铜钱同步为 36231687416, 实际为 %d", state.Coins)
+	}
+	if state.Ingots != 39479 {
+		t.Errorf("期望角色元宝同步为 39479, 实际为 %d", state.Ingots)
+	}
 
-	// 6. 验证激活态心跳已定时发送
+	// 8. 验证激活态心跳已定时发送
 	select {
 	case <-receivedHeartbeat:
 	case <-time.After(2 * time.Second):
@@ -148,6 +189,7 @@ func TestRoleSession_DefaultGatewayHandshake_FullFlow(t *testing.T) {
 	session.Close()
 	serverWg.Wait()
 }
+
 
 // TestRoleSession_DefaultGatewayHandshake_Rejected 验证当服务端返回非法凭据 (ResultCode!=4) 时抛出明确异常并拒绝激活
 func TestRoleSession_DefaultGatewayHandshake_Rejected(t *testing.T) {

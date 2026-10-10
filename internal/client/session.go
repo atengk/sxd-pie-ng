@@ -323,81 +323,109 @@ func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respAction
 	}
 }
 
-// DefaultGatewayAuthenticator 角色默认主服网关认证握手与场景初始化实现。
+// DefaultGatewayAuthenticator 角色默认主服网关认证握手、城镇场景与全量资产四步初始化实现。
+// 严格遵循真实二进制交互规范：
+// 0. Module 0, Action 0 (0x00000000) 登录握手并校验 ResultCode=4
+// 1. Module 0, Action 72 (0x00000048) 城镇场景初始化同步 TownID
+// 2. Module 0, Action 99 (0x00000063) 场景进阶状态同步 (携带前序 0x48)
+// 3. Module 165, Action 0 (0x00A50000) 扩展业务模块初始化 (携带前序 0x63)
+// 4. Module 0, Action 2 (0x00000002) 全量角色资产拉取 (携带前序 0x00A50000) 并更新真实资产快照
 func DefaultGatewayAuthenticator(s *RoleSession) error {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	// 1. 构造 Module 0, Action 0 登录握手包
-	timeStr := fmt.Sprintf("%d", s.cfg.Time)
-	if s.cfg.Time == 0 {
-		timeStr = fmt.Sprintf("%d", time.Now().Unix())
-	}
-	platform := s.cfg.Platform
-	if platform == "" {
-		platform = "疯玩"
-	}
-	hash := s.cfg.Hash
-	if hash == "" {
-		hash = s.cfg.Token
-	}
-	username := s.cfg.Username
-	if username == "" {
-		username = s.cfg.RoleID
+	// 0. 构造并发送登录握手请求包 (优先主服 0x00000000，或跨服 0x005E0000)
+	var loginPkt *protocol.Packet
+	var loginRespActionID uint32 = protocol.ActionIDPlayerLogin
+
+	if s.cfg.Time1 != 0 && s.cfg.Hash1 != "" && s.cfg.Hash == "" {
+		// 跨服网关凭据
+		loginRespActionID = protocol.ActionIDStLogin
+		var err error
+		loginPkt, err = protocol.BuildStLoginPacket(protocol.StLoginRequest{
+			ServerID:   s.cfg.ServerID,
+			ClientType: 4,
+			RoleName:   s.RoleName(),
+			Time1:      s.cfg.Time1,
+			Hash1:      s.cfg.Hash1,
+		})
+		if err != nil {
+			return fmt.Errorf("client: failed to build st login packet: %w", err)
+		}
+	} else {
+		// 主服原生网关凭据
+		timeStr := fmt.Sprintf("%d", s.cfg.Time)
+		if s.cfg.Time == 0 {
+			timeStr = fmt.Sprintf("%d", time.Now().Unix())
+		}
+		platform := s.cfg.Platform
+		if platform == "" {
+			platform = "疯玩"
+		}
+		hash := s.cfg.Hash
+		if hash == "" {
+			hash = s.cfg.Token
+		}
+		username := s.cfg.Username
+		if username == "" {
+			username = s.cfg.RoleID
+		}
+
+		loginReq := protocol.PlayerLoginRequest{
+			Username:   username,
+			Hash:       hash,
+			Time:       timeStr,
+			Source:     "sxd_baidu_pinpai_bt",
+			Platform:   platform,
+			ClientType: "web",
+		}
+
+		var err error
+		loginPkt, err = protocol.BuildPlayerLoginPacket(loginReq)
+		if err != nil {
+			return fmt.Errorf("client: failed to build login packet: %w", err)
+		}
 	}
 
-	loginReq := protocol.PlayerLoginRequest{
-		Username:   username,
-		Hash:       hash,
-		Time:       timeStr,
-		Source:     "sxd_baidu_pinpai_bt",
-		Platform:   platform,
-		ClientType: "web",
-	}
-
-	loginPkt, err := protocol.BuildPlayerLoginPacket(loginReq)
-	if err != nil {
-		return fmt.Errorf("client: failed to build login packet: %w", err)
-	}
-
-	// 2. 发送登录包并等待回包
-	respPkt, err := s.Call(ctx, loginPkt, protocol.ActionIDPlayerLogin)
+	respPkt, err := s.Call(ctx, loginPkt, loginRespActionID)
 	if err != nil {
 		return fmt.Errorf("client: login handshake timeout or failed: %w", err)
 	}
 
-	// 3. 校验登录回包状态码
-	authResp, err := protocol.ParsePlayerLoginAuthResponse(respPkt.Payload)
-	if err == nil {
-		if authResp.ResultCode != 4 {
-			return fmt.Errorf("client: authentication rejected by server: resultCode=%d", authResp.ResultCode)
+	// 校验登录回包状态码
+	if loginRespActionID == protocol.ActionIDPlayerLogin {
+		authResp, err := protocol.ParsePlayerLoginAuthResponse(respPkt.Payload)
+		if err == nil {
+			if authResp.ResultCode != 4 {
+				return fmt.Errorf("client: authentication rejected by server: resultCode=%d", authResp.ResultCode)
+			}
+		} else {
+			res, pErr := protocol.ParsePlayerLoginResult(respPkt.Payload)
+			if pErr != nil {
+				return fmt.Errorf("client: invalid login response payload: %w", err)
+			}
+			if res.Result != 0 {
+				return fmt.Errorf("client: login failed with status code %d", res.Result)
+			}
+			s.UpdatePlayerState(func(ps *PlayerState) {
+				if res.Level > 0 {
+					ps.Level = int(res.Level)
+				}
+				if res.Stamina > 0 {
+					ps.Stamina = int(res.Stamina)
+				}
+				if res.Coins > 0 {
+					ps.Coins = res.Coins
+				}
+				if res.Ingots > 0 {
+					ps.Ingots = int64(res.Ingots)
+				}
+			})
 		}
-	} else {
-		res, pErr := protocol.ParsePlayerLoginResult(respPkt.Payload)
-		if pErr != nil {
-			return fmt.Errorf("client: invalid login response payload: %w", err)
-		}
-		if res.Result != 0 {
-			return fmt.Errorf("client: login failed with status code %d", res.Result)
-		}
-		s.UpdatePlayerState(func(ps *PlayerState) {
-			if res.Level > 0 {
-				ps.Level = int(res.Level)
-			}
-			if res.Stamina > 0 {
-				ps.Stamina = int(res.Stamina)
-			}
-			if res.Coins > 0 {
-				ps.Coins = res.Coins
-			}
-			if res.Ingots > 0 {
-				ps.Ingots = int64(res.Ingots)
-			}
-		})
 	}
 
-	// 4. 自动执行 Action 72 (TownID) 与 Action 99 城镇场景初始化
-	step1Pkt := protocol.BuildPlayerInitStep1Packet(0)
+	// 1. Step 1: 自动执行 Action 72 城镇场景初始化同步
+	step1Pkt := protocol.BuildPlayerInitStep1Packet(0x0048)
 	step1Resp, err := s.Call(ctx, step1Pkt, protocol.ActionIDPlayerInitStep1)
 	if err == nil {
 		if initRes, pErr := protocol.ParsePlayerInitStep1Result(step1Resp.Payload); pErr == nil {
@@ -407,11 +435,58 @@ func DefaultGatewayAuthenticator(s *RoleSession) error {
 		}
 	}
 
-	step2Pkt := protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00, 0x00, 0x00, 0x00})
+	// 2. Step 2: 场景进阶同步 (ActionID 0x00000063，携带前序动作 0x0048)
+	step2Pkt := protocol.BuildPlayerInitStep2Packet(0x0048)
 	_, _ = s.Call(ctx, step2Pkt, protocol.ActionIDPlayerInitStep2)
+
+	// 3. Step 3: 扩展模块初始化 (ActionID 0x00A50000，携带前序动作 0x0063)
+	step3Pkt := protocol.BuildPlayerInitStep3Packet(0x0063)
+	_, _ = s.Call(ctx, step3Pkt, protocol.ActionIDPlayerInitStep3)
+
+	// 4. Step 4: 全量角色资产快照获取 (ActionID 0x00000002，携带前序动作 0x00A50000)
+	step4Pkt := protocol.BuildPlayerGetInfoPacket(0x00A50000)
+	step4Resp, err := s.Call(ctx, step4Pkt, protocol.ActionIDPlayerGetInfo)
+	if err == nil {
+		infoRes, pErr := protocol.ParsePlayerLoginResult(step4Resp.Payload)
+		if pErr == nil && infoRes != nil {
+			s.UpdatePlayerState(func(ps *PlayerState) {
+				if infoRes.Level > 0 {
+					ps.Level = int(infoRes.Level)
+				}
+				if infoRes.Coins > 0 {
+					ps.Coins = infoRes.Coins
+				}
+				if infoRes.Ingots > 0 {
+					ps.Ingots = int64(infoRes.Ingots)
+				}
+				if infoRes.Stamina > 0 {
+					ps.Stamina = int(infoRes.Stamina)
+				}
+				if infoRes.ExtraStamina > 0 {
+					ps.ExtraStamina = int(infoRes.ExtraStamina)
+				}
+				if infoRes.MaxStamina > 0 {
+					ps.MaxStamina = int(infoRes.MaxStamina)
+				}
+				if infoRes.VIP > 0 {
+					ps.VIP = int(infoRes.VIP)
+				}
+			})
+			slog.Info("网关握手与全量角色资产同步成功",
+				"role_id", s.RoleID(),
+				"role_name", infoRes.RoleName,
+				"town_id", s.GetPlayerState().TownID,
+				"level", infoRes.Level,
+				"coins", infoRes.Coins,
+				"ingots", infoRes.Ingots,
+				"stamina", infoRes.Stamina,
+			)
+		}
+	}
 
 	return nil
 }
+
 
 // Start 启动独立 Goroutine 驱动的网络状态机会话。
 func (s *RoleSession) Start(parentCtx context.Context) error {
@@ -591,22 +666,6 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 	}
 
 	s.reconnectAttempts++
-	// 当外部真实服务器因缺少动态Token频繁断开时，自动降级至内置沙箱网关，防止死循环刷屏
-	if !s.isCustomDialer && s.reconnectAttempts >= 2 && s.cfg.ServerAddr != "sandbox" && s.cfg.ServerAddr != "mock" && s.cfg.ServerAddr != "dry-run" {
-		slog.Warn("外部游戏区服网关未完成平台动态鉴权，已自适应切换至虚拟沙箱网关保持运行",
-			"role_id", s.cfg.RoleID,
-			"original_server", s.cfg.ServerAddr,
-		)
-		s.cfg.ServerAddr = "sandbox"
-		s.cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			c1, c2 := net.Pipe()
-			go runMockGameServer(c2)
-			return c1, nil
-		}
-		s.reconnectAttempts = 0
-		return true
-	}
-
 	if s.cfg.MaxReconnectAttempts > 0 && s.reconnectAttempts >= s.cfg.MaxReconnectAttempts {
 		slog.Error("超过最大重连尝试次数，会话终止",
 			"role_id", s.cfg.RoleID,
@@ -615,6 +674,7 @@ func (s *RoleSession) handleConnectFailure(err error) bool {
 		s.setState(StateClosed)
 		return false
 	}
+
 
 	s.setState(StateReconnecting)
 
@@ -738,19 +798,12 @@ func runMockGameServer(conn net.Conn) {
 
 		switch pkt.ActionID {
 		case protocol.ActionIDPlayerLogin:
-			// 响应主服登录成功，推送全量角色资产快照 (201 体力、39409 元宝、362 亿铜钱)
-			var rawBuf bytes.Buffer
-			binary.Write(&rawBuf, binary.BigEndian, int16(0)) // Result
-			binary.Write(&rawBuf, binary.BigEndian, int16(2)) // RoleID
-			name := "梦一场"
-			binary.Write(&rawBuf, binary.BigEndian, uint16(len(name)))
-			rawBuf.WriteString(name)
-			binary.Write(&rawBuf, binary.BigEndian, int32(300))         // Level
-			binary.Write(&rawBuf, binary.BigEndian, int32(39409))       // Ingots
-			binary.Write(&rawBuf, binary.BigEndian, int64(36200000000)) // Coins
-			rawBuf.Write(make([]byte, 16))                              // 16B 占位
-			binary.Write(&rawBuf, binary.BigEndian, int32(201))         // Stamina 201 点
-			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerLogin, rawBuf.Bytes()))
+			// 响应主服登录成功 Golden Case 2 (ResultCode=4)
+			respPayload := []byte{
+				0x00, 0x00, 0x00, 0x00, 0x04, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x01, 0x00, 0x0b, 0x00, 0x00, 0x10, 0x85, 0x01,
+			}
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerLogin, respPayload))
 
 		case protocol.ActionIDPlayerInitStep1:
 			// 响应 Golden Case 3 (TownID=4879, TownLine=2, SceneID=4879, TargetID=4882)
@@ -763,6 +816,27 @@ func runMockGameServer(conn net.Conn) {
 			// 响应场景初始化步 2 确认
 			initResp2 := protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00})
 			_ = protocol.WritePacket(conn, initResp2)
+
+		case protocol.ActionIDPlayerInitStep3:
+			// 响应扩展模块初始化步 3 确认
+			initResp3 := protocol.NewPacket(protocol.ActionIDPlayerInitStep3, make([]byte, 8))
+			_ = protocol.WritePacket(conn, initResp3)
+
+		case protocol.ActionIDPlayerGetInfo:
+			// 响应全量角色资产快照 (201 体力、39409 元宝、362 亿铜钱)
+			var rawBuf bytes.Buffer
+			binary.Write(&rawBuf, binary.BigEndian, int16(0)) // Result
+			binary.Write(&rawBuf, binary.BigEndian, int16(2)) // RoleID
+			name := "梦一场"
+			binary.Write(&rawBuf, binary.BigEndian, uint16(len(name)))
+			rawBuf.WriteString(name)
+			binary.Write(&rawBuf, binary.BigEndian, int32(300))         // Level
+			binary.Write(&rawBuf, binary.BigEndian, int32(39409))       // Ingots
+			binary.Write(&rawBuf, binary.BigEndian, int64(36200000000)) // Coins
+			rawBuf.Write(make([]byte, 16))                              // 16B 占位
+			binary.Write(&rawBuf, binary.BigEndian, int32(201))         // Stamina 201 点
+			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerGetInfo, rawBuf.Bytes()))
+
 
 		case protocol.ActionIDStLogin:
 			// 响应跨服登录成功，并推送 0x0300 初始体力

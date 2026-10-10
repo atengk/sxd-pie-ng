@@ -286,12 +286,41 @@ func ParsePlayerInitStep1Result(payload []byte) (*PlayerInitStep1Result, error) 
 	if err != nil {
 		return nil, err
 	}
-
 	return &PlayerInitStep1Result{
 		TownID:   townID,
 		TownLine: townLine,
 		SceneID:  sceneID,
 		TargetID: targetID,
 	}, nil
+}
+
+// BuildPlayerInitStep2Packet 构造角色场景初始化握手步 2 封包 (ActionID 0x00000063)。
+//
+// @param prevActionID 前序动作号 (通常为 0x0048)
+// @return 编码好的封包实例
+func BuildPlayerInitStep2Packet(prevActionID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(prevActionID)
+	return NewPacket(ActionIDPlayerInitStep2, w.Bytes())
+}
+
+// BuildPlayerInitStep3Packet 构造角色扩展模块初始化握手步 3 封包 (ActionID 0x00A50000)。
+//
+// @param prevActionID 前序动作号 (通常为 0x0063)
+// @return 编码好的封包实例
+func BuildPlayerInitStep3Packet(prevActionID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(prevActionID)
+	return NewPacket(ActionIDPlayerInitStep3, w.Bytes())
+}
+
+// BuildPlayerGetInfoPacket 构造拉取全量角色资产快照封包 (ActionID 0x00000002)。
+//
+// @param prevActionID 前序动作号 (通常为 0x00A50000)
+// @return 编码好的封包实例
+func BuildPlayerGetInfoPacket(prevActionID int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(prevActionID)
+	return NewPacket(ActionIDPlayerGetInfo, w.Bytes())
 }
 
