@@ -169,3 +169,136 @@ func ParseFarmHarvestRequest(payload []byte) (*FarmHarvestRequest, error) {
 		PrevAct: prevAct,
 	}, nil
 }
+
+// BuildFarmGetInfoResultPacket 构造药园土地列表查询响应二进制封包。
+func BuildFarmGetInfoResultPacket(res FarmGetInfoResult) (*Packet, error) {
+	w := NewWriter()
+	w.WriteUint16(uint16(len(res.Fields)))
+	for _, f := range res.Fields {
+		w.WriteInt32(f.LandID)
+		w.WriteInt32(f.State)
+		w.WriteInt32(f.Cooldown)
+		w.WriteInt32(f.SeedOrRoleID)
+	}
+	return NewPacket(ActionIDFarmGetInfo, w.Bytes()), nil
+}
+
+// ParseFarmGetInfoResult 从载荷反序列化药园土地状态列表。
+func ParseFarmGetInfoResult(payload []byte) (*FarmGetInfoResult, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("%w: payload too short for farm info result", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	count, err := r.ReadUint16()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read fields count: %v", ErrInvalidPayload, err)
+	}
+
+	fields := make([]FarmField, 0, count)
+	for i := 0; i < int(count); i++ {
+		landID, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read land_id at index %d: %v", ErrInvalidPayload, i, err)
+		}
+		state, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read state at index %d: %v", ErrInvalidPayload, i, err)
+		}
+		cooldown, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read cooldown at index %d: %v", ErrInvalidPayload, i, err)
+		}
+		seedOrRoleID, err := r.ReadInt32()
+		if err != nil {
+			return nil, fmt.Errorf("%w: failed to read seed_or_role_id at index %d: %v", ErrInvalidPayload, i, err)
+		}
+
+		fields = append(fields, FarmField{
+			LandID:       landID,
+			State:        state,
+			Cooldown:     cooldown,
+			SeedOrRoleID: seedOrRoleID,
+		})
+	}
+
+	return &FarmGetInfoResult{Fields: fields}, nil
+}
+
+// BuildFarmHarvestResultPacket 构造药草收获结算响应二进制封包。
+func BuildFarmHarvestResultPacket(res FarmHarvestResult) (*Packet, error) {
+	w := NewWriter()
+	if res.Success {
+		w.WriteUint8(1)
+	} else {
+		w.WriteUint8(0)
+	}
+	w.WriteInt64(res.GainExp)
+	w.WriteInt64(res.GainCoins)
+	return NewPacket(ActionIDFarmHarvest, w.Bytes()), nil
+}
+
+// ParseFarmHarvestResult 从载荷反序列化药草收获结算响应。
+func ParseFarmHarvestResult(payload []byte) (*FarmHarvestResult, error) {
+	if len(payload) < 17 {
+		return nil, fmt.Errorf("%w: payload too short for farm harvest result", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	successByte, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read success: %v", ErrInvalidPayload, err)
+	}
+	gainExp, err := r.ReadInt64()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read gain_exp: %v", ErrInvalidPayload, err)
+	}
+	gainCoins, err := r.ReadInt64()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read gain_coins: %v", ErrInvalidPayload, err)
+	}
+
+	return &FarmHarvestResult{
+		Success:   successByte == 1,
+		GainExp:   gainExp,
+		GainCoins: gainCoins,
+	}, nil
+}
+
+// BuildFarmPlantResultPacket 构造药园播种响应二进制封包。
+func BuildFarmPlantResultPacket(res FarmPlantResult) (*Packet, error) {
+	w := NewWriter()
+	if res.Success {
+		w.WriteUint8(1)
+	} else {
+		w.WriteUint8(0)
+	}
+	w.WriteInt32(res.LandID)
+	w.WriteInt32(res.Cooldown)
+	return NewPacket(ActionIDFarmPlant, w.Bytes()), nil
+}
+
+// ParseFarmPlantResult 从载荷反序列化药园播种响应结果。
+func ParseFarmPlantResult(payload []byte) (*FarmPlantResult, error) {
+	if len(payload) < 9 {
+		return nil, fmt.Errorf("%w: payload too short for farm plant result", ErrInvalidPayload)
+	}
+	r := NewReader(payload)
+	successByte, err := r.ReadUint8()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read success: %v", ErrInvalidPayload, err)
+	}
+	landID, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read land_id: %v", ErrInvalidPayload, err)
+	}
+	cooldown, err := r.ReadInt32()
+	if err != nil {
+		return nil, fmt.Errorf("%w: failed to read cooldown: %v", ErrInvalidPayload, err)
+	}
+
+	return &FarmPlantResult{
+		Success:  successByte == 1,
+		LandID:   landID,
+		Cooldown: cooldown,
+	}, nil
+}
+

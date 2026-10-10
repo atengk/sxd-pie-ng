@@ -17,7 +17,13 @@ import (
 )
 
 // NewHerbGardenRoutine 构造药园种植与巡检任务。
-func NewHerbGardenRoutine() scheduler.ActivityRoutine {
+// 支持无参调用或注入 dictionary.Repository 字典仓储。
+func NewHerbGardenRoutine(dictRepos ...dictionary.Repository) scheduler.ActivityRoutine {
+	var dictRepo dictionary.Repository
+	if len(dictRepos) > 0 {
+		dictRepo = dictRepos[0]
+	}
+
 	return scheduler.NewBaseRoutine(
 		"herb_garden",
 		"farming",
@@ -28,54 +34,126 @@ func NewHerbGardenRoutine() scheduler.ActivityRoutine {
 			if session == nil {
 				return client.ErrNotConnected
 			}
+			if session.State() != client.StateActive {
+				return client.ErrNotConnected
+			}
 
 			// 1. 拟人防封随机抖动
 			if jitter != nil {
 				_ = jitter.Wait(ctx)
 			}
 
-			slog.Info("正在执行资源任务: 药园种植巡检与采摘", "role_id", session.RoleID())
+			slog.Info("正在执行资源任务: 药园土地巡检、成熟采摘与播种", "role_id", session.RoleID())
 
-			// 2. 发送查询土地状态请求
+			// 2. 发送查询土地状态请求 (ActionIDFarmGetInfo 0x000D0000)
 			infoPkt, err := protocol.BuildFarmGetInfoPacket(protocol.FarmGetInfoRequest{
 				PrevAct: protocol.ActionIDTownEnter,
 			})
 			if err != nil {
-				return fmt.Errorf("构造药园查询封包失败: %w", err)
-			}
-			if err := session.Send(infoPkt); err != nil {
-				return fmt.Errorf("发送药园查询请求失败: %w", err)
+				return fmt.Errorf("farming: 构造药园查询封包失败: %w", err)
 			}
 
-			// 3. 针对默认土地序列 (如 10, 11, 12, 13) 尝试采摘成熟药草
-			defaultLands := []int32{10, 11, 12, 13}
-			for _, landID := range defaultLands {
-				harvestPkt, err := protocol.BuildFarmHarvestPacket(protocol.FarmHarvestRequest{
-					LandID:  landID,
-					PrevAct: protocol.ActionIDFarmGetInfo,
-				})
-				if err == nil {
-					_ = session.Send(harvestPkt)
+			respPkt, err := session.Call(ctx, infoPkt, protocol.ActionIDFarmGetInfo)
+			if err != nil {
+				return fmt.Errorf("farming: 查询药园土地状态超时或失败: %w", err)
+			}
+
+			infoRes, err := protocol.ParseFarmGetInfoResult(respPkt.Payload)
+			if err != nil {
+				return fmt.Errorf("farming: 解析药园土地列表失败: %w", err)
+			}
+
+			var harvestedCount int
+			var plantedCount int
+			var growingCount int
+			var totalGainExp int64
+			var totalGainCoins int64
+
+			// 确定待种植的种子/伙伴编号 (默认 169 仙玲珑经验草)
+			seedID := int32(169)
+			seedName := "仙玲珑经验草"
+			if dictRepo != nil {
+				if item, dErr := dictRepo.GetItem(int(seedID)); dErr == nil && item != nil {
+					seedName = item.Name
 				}
 			}
 
-			// 4. 对空闲土地自动种植经验草或种子 (种子/伙伴 0xA9)
-			for _, landID := range defaultLands {
-				plantPkt, err := protocol.BuildFarmPlantPacket(protocol.FarmPlantRequest{
-					LandID:       landID,
-					SeedOrRoleID: 169, // 仙玲珑/主力经验草种子
-					PrevAct:      protocol.ActionIDFarmHarvest,
-				})
-				if err == nil {
-					_ = session.Send(plantPkt)
+			// 3. 遍历土地列表并执行智能处理
+			for _, field := range infoRes.Fields {
+				// 未开垦土地 (State == 0) 跳过
+				if field.State == 0 {
+					continue
+				}
+
+				// 土地处于可采摘状态 (State == 3)
+				if field.State == 3 {
+					harvestPkt, hErr := protocol.BuildFarmHarvestPacket(protocol.FarmHarvestRequest{
+						LandID:  field.LandID,
+						PrevAct: protocol.ActionIDFarmGetInfo,
+					})
+					if hErr == nil {
+						hResp, callErr := session.Call(ctx, harvestPkt, protocol.ActionIDFarmHarvest)
+						if callErr == nil {
+							if hResult, pErr := protocol.ParseFarmHarvestResult(hResp.Payload); pErr == nil && hResult.Success {
+								harvestedCount++
+								totalGainExp += hResult.GainExp
+								totalGainCoins += hResult.GainCoins
+								session.AddRewards(hResult.GainExp, hResult.GainCoins)
+								slog.Info("药园药草采摘成功",
+									"role_id", session.RoleID(),
+									"land_id", field.LandID,
+									"gain_exp", hResult.GainExp,
+									"gain_coins", hResult.GainCoins,
+								)
+								// 采摘后地块即刻变为空闲状态，可继续播种
+								field.State = 1
+							}
+						}
+					}
+				}
+
+				// 土地处于空闲状态 (State == 1，含采摘后地块)
+				if field.State == 1 {
+					plantPkt, pErr := protocol.BuildFarmPlantPacket(protocol.FarmPlantRequest{
+						LandID:       field.LandID,
+						SeedOrRoleID: seedID,
+						PrevAct:      protocol.ActionIDFarmHarvest,
+					})
+					if pErr == nil {
+						pResp, callErr := session.Call(ctx, plantPkt, protocol.ActionIDFarmPlant)
+						if callErr == nil {
+							if pResult, parseErr := protocol.ParseFarmPlantResult(pResp.Payload); parseErr == nil && pResult.Success {
+								plantedCount++
+								slog.Info("药园土地播种成功",
+									"role_id", session.RoleID(),
+									"land_id", field.LandID,
+									"seed_name", seedName,
+									"seed_id", seedID,
+									"cooldown_sec", pResult.Cooldown,
+								)
+							}
+						}
+					}
+				} else if field.State == 2 {
+					growingCount++
 				}
 			}
 
-			slog.Info("药园种植与收获巡检完成", "role_id", session.RoleID(), "processed_lands", len(defaultLands))
+			slog.Info("药园土地巡检与作业完成",
+				"role_id", session.RoleID(),
+				"total_fields", len(infoRes.Fields),
+				"harvested", harvestedCount,
+				"planted", plantedCount,
+				"growing", growingCount,
+				"gain_exp", totalGainExp,
+				"gain_coins", totalGainCoins,
+			)
+
 			return nil
 		},
 	)
 }
+
 
 // NewPilgrimageRoutine 构造西天取经护送任务。
 func NewPilgrimageRoutine() scheduler.ActivityRoutine {

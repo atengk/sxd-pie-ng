@@ -85,3 +85,69 @@ func TestFarmCodec_BuildAndParse(t *testing.T) {
 		t.Errorf("收获解析结果不符: %+v", parsedHarvest)
 	}
 }
+
+func TestFarmCodec_ResultsRoundtrip(t *testing.T) {
+	// 1. 验证 FarmGetInfoResult
+	infoRes := FarmGetInfoResult{
+		Fields: []FarmField{
+			{LandID: 10, State: 1, Cooldown: 0, SeedOrRoleID: 0},       // 空闲
+			{LandID: 11, State: 3, Cooldown: 0, SeedOrRoleID: 169},     // 成熟待采摘
+			{LandID: 12, State: 2, Cooldown: 3600, SeedOrRoleID: 169},  // 种植中
+		},
+	}
+	pktInfoRes, err := BuildFarmGetInfoResultPacket(infoRes)
+	if err != nil {
+		t.Fatalf("BuildFarmGetInfoResultPacket 失败: %v", err)
+	}
+	if pktInfoRes.ActionID != ActionIDFarmGetInfo {
+		t.Fatalf("ActionID 不匹配: 0x%08X", pktInfoRes.ActionID)
+	}
+
+	parsedInfoRes, err := ParseFarmGetInfoResult(pktInfoRes.Payload)
+	if err != nil {
+		t.Fatalf("ParseFarmGetInfoResult 失败: %v", err)
+	}
+	if len(parsedInfoRes.Fields) != 3 {
+		t.Fatalf("土地列表长度不匹配: 期望 3, 实际 %d", len(parsedInfoRes.Fields))
+	}
+	if parsedInfoRes.Fields[1].State != 3 || parsedInfoRes.Fields[1].LandID != 11 {
+		t.Errorf("第 2 块土地状态不符: %+v", parsedInfoRes.Fields[1])
+	}
+
+	// 2. 验证 FarmHarvestResult
+	harvestRes := FarmHarvestResult{
+		Success:   true,
+		GainExp:   125000,
+		GainCoins: 580000,
+	}
+	pktHarvestRes, err := BuildFarmHarvestResultPacket(harvestRes)
+	if err != nil {
+		t.Fatalf("BuildFarmHarvestResultPacket 失败: %v", err)
+	}
+	parsedHarvestRes, err := ParseFarmHarvestResult(pktHarvestRes.Payload)
+	if err != nil {
+		t.Fatalf("ParseFarmHarvestResult 失败: %v", err)
+	}
+	if !parsedHarvestRes.Success || parsedHarvestRes.GainExp != 125000 || parsedHarvestRes.GainCoins != 580000 {
+		t.Errorf("收获解析结果不符: %+v", parsedHarvestRes)
+	}
+
+	// 3. 验证 FarmPlantResult
+	plantRes := FarmPlantResult{
+		Success:  true,
+		LandID:   10,
+		Cooldown: 28800,
+	}
+	pktPlantRes, err := BuildFarmPlantResultPacket(plantRes)
+	if err != nil {
+		t.Fatalf("BuildFarmPlantResultPacket 失败: %v", err)
+	}
+	parsedPlantRes, err := ParseFarmPlantResult(pktPlantRes.Payload)
+	if err != nil {
+		t.Fatalf("ParseFarmPlantResult 失败: %v", err)
+	}
+	if !parsedPlantRes.Success || parsedPlantRes.LandID != 10 || parsedPlantRes.Cooldown != 28800 {
+		t.Errorf("播种解析结果不符: %+v", parsedPlantRes)
+	}
+}
+
