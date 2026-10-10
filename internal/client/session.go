@@ -87,6 +87,7 @@ type PlayerState struct {
 	Ingots      int64 `json:"ingots"`
 	StateSource int64 `json:"state_source"`
 	BagCapacity int   `json:"bag_capacity"`
+	TownID      int   `json:"town_id"`
 }
 
 // RoleSession 代表与游戏服务器建立的长连接角色会话。
@@ -102,8 +103,9 @@ type RoleSession struct {
 	conn    net.Conn
 	writeMu sync.Mutex
 
-	handlers  map[uint32][]func(*protocol.Packet)
-	handlerMu sync.RWMutex
+	handlers     map[uint32][]func(*protocol.Packet)
+	pendingCalls map[uint32][]chan *protocol.Packet
+	handlerMu    sync.RWMutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -130,6 +132,11 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		cfg.ReconnectInterval = 2 * time.Second
 	}
 	isCustom := cfg.Dialer != nil
+	if cfg.Authenticator == nil {
+		if !isCustom || (cfg.ServerAddr != "mock" && cfg.ServerAddr != "mock-pipe") {
+			cfg.Authenticator = DefaultGatewayAuthenticator
+		}
+	}
 	if cfg.Dialer == nil {
 		if cfg.ServerAddr == "" || cfg.ServerAddr == "mock" || cfg.ServerAddr == "dry-run" || cfg.ServerAddr == "sandbox" {
 			cfg.Dialer = func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -150,6 +157,7 @@ func NewRoleSession(cfg SessionConfig) *RoleSession {
 		isCustomDialer: isCustom,
 		state:          StateDisconnected,
 		handlers:       make(map[uint32][]func(*protocol.Packet)),
+		pendingCalls:   make(map[uint32][]chan *protocol.Packet),
 		playerState: PlayerState{
 			Level:       300,
 			Stamina:     201,
@@ -276,6 +284,133 @@ func (s *RoleSession) RegisterHandler(actionID uint32, handler func(*protocol.Pa
 		s.handlers = make(map[uint32][]func(*protocol.Packet))
 	}
 	s.handlers[actionID] = append(s.handlers[actionID], handler)
+}
+
+// Call 发送指定请求封包并同步等待特定 ActionID 的对端回包。
+func (s *RoleSession) Call(ctx context.Context, req *protocol.Packet, respActionID uint32) (*protocol.Packet, error) {
+	ch := make(chan *protocol.Packet, 1)
+
+	s.handlerMu.Lock()
+	if s.pendingCalls == nil {
+		s.pendingCalls = make(map[uint32][]chan *protocol.Packet)
+	}
+	s.pendingCalls[respActionID] = append(s.pendingCalls[respActionID], ch)
+	s.handlerMu.Unlock()
+
+	defer func() {
+		s.handlerMu.Lock()
+		calls := s.pendingCalls[respActionID]
+		for i, c := range calls {
+			if c == ch {
+				s.pendingCalls[respActionID] = append(calls[:i], calls[i+1:]...)
+				break
+			}
+		}
+		s.handlerMu.Unlock()
+	}()
+
+	if err := s.Send(req); err != nil {
+		return nil, err
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-s.ctx.Done():
+		return nil, ErrSessionClosed
+	case p := <-ch:
+		return p, nil
+	}
+}
+
+// DefaultGatewayAuthenticator 角色默认主服网关认证握手与场景初始化实现。
+func DefaultGatewayAuthenticator(s *RoleSession) error {
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+
+	// 1. 构造 Module 0, Action 0 登录握手包
+	timeStr := fmt.Sprintf("%d", s.cfg.Time)
+	if s.cfg.Time == 0 {
+		timeStr = fmt.Sprintf("%d", time.Now().Unix())
+	}
+	platform := s.cfg.Platform
+	if platform == "" {
+		platform = "疯玩"
+	}
+	hash := s.cfg.Hash
+	if hash == "" {
+		hash = s.cfg.Token
+	}
+	username := s.cfg.Username
+	if username == "" {
+		username = s.cfg.RoleID
+	}
+
+	loginReq := protocol.PlayerLoginRequest{
+		Username:   username,
+		Hash:       hash,
+		Time:       timeStr,
+		Source:     "sxd_baidu_pinpai_bt",
+		Platform:   platform,
+		ClientType: "web",
+	}
+
+	loginPkt, err := protocol.BuildPlayerLoginPacket(loginReq)
+	if err != nil {
+		return fmt.Errorf("client: failed to build login packet: %w", err)
+	}
+
+	// 2. 发送登录包并等待回包
+	respPkt, err := s.Call(ctx, loginPkt, protocol.ActionIDPlayerLogin)
+	if err != nil {
+		return fmt.Errorf("client: login handshake timeout or failed: %w", err)
+	}
+
+	// 3. 校验登录回包状态码
+	authResp, err := protocol.ParsePlayerLoginAuthResponse(respPkt.Payload)
+	if err == nil {
+		if authResp.ResultCode != 4 {
+			return fmt.Errorf("client: authentication rejected by server: resultCode=%d", authResp.ResultCode)
+		}
+	} else {
+		res, pErr := protocol.ParsePlayerLoginResult(respPkt.Payload)
+		if pErr != nil {
+			return fmt.Errorf("client: invalid login response payload: %w", err)
+		}
+		if res.Result != 0 {
+			return fmt.Errorf("client: login failed with status code %d", res.Result)
+		}
+		s.UpdatePlayerState(func(ps *PlayerState) {
+			if res.Level > 0 {
+				ps.Level = int(res.Level)
+			}
+			if res.Stamina > 0 {
+				ps.Stamina = int(res.Stamina)
+			}
+			if res.Coins > 0 {
+				ps.Coins = res.Coins
+			}
+			if res.Ingots > 0 {
+				ps.Ingots = int64(res.Ingots)
+			}
+		})
+	}
+
+	// 4. 自动执行 Action 72 (TownID) 与 Action 99 城镇场景初始化
+	step1Pkt := protocol.BuildPlayerInitStep1Packet(0)
+	step1Resp, err := s.Call(ctx, step1Pkt, protocol.ActionIDPlayerInitStep1)
+	if err == nil {
+		if initRes, pErr := protocol.ParsePlayerInitStep1Result(step1Resp.Payload); pErr == nil {
+			s.UpdatePlayerState(func(ps *PlayerState) {
+				ps.TownID = int(initRes.TownID)
+			})
+		}
+	}
+
+	step2Pkt := protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00, 0x00, 0x00, 0x00})
+	_, _ = s.Call(ctx, step2Pkt, protocol.ActionIDPlayerInitStep2)
+
+	return nil
 }
 
 // Start 启动独立 Goroutine 驱动的网络状态机会话。
@@ -571,9 +706,21 @@ func (s *RoleSession) readLoop(conn net.Conn, errCh chan<- error) {
 }
 
 func (s *RoleSession) dispatchPacket(pkt *protocol.Packet) {
-	s.handlerMu.RLock()
-	handlers := s.handlers[pkt.ActionID]
-	s.handlerMu.RUnlock()
+	s.handlerMu.Lock()
+	if calls, ok := s.pendingCalls[pkt.ActionID]; ok && len(calls) > 0 {
+		ch := calls[0]
+		s.pendingCalls[pkt.ActionID] = calls[1:]
+		select {
+		case ch <- pkt:
+		default:
+		}
+	}
+	var handlers []func(*protocol.Packet)
+	if list := s.handlers[pkt.ActionID]; len(list) > 0 {
+		handlers = make([]func(*protocol.Packet), len(list))
+		copy(handlers, list)
+	}
+	s.handlerMu.Unlock()
 
 	for _, h := range handlers {
 		h(pkt)
@@ -604,6 +751,18 @@ func runMockGameServer(conn net.Conn) {
 			rawBuf.Write(make([]byte, 16))                              // 16B 占位
 			binary.Write(&rawBuf, binary.BigEndian, int32(201))         // Stamina 201 点
 			_ = protocol.WritePacket(conn, protocol.NewPacket(protocol.ActionIDPlayerLogin, rawBuf.Bytes()))
+
+		case protocol.ActionIDPlayerInitStep1:
+			// 响应 Golden Case 3 (TownID=4879, TownLine=2, SceneID=4879, TargetID=4882)
+			initResp := protocol.NewPacket(protocol.ActionIDPlayerInitStep1, []byte{
+				0x00, 0x00, 0x13, 0x0f, 0x00, 0x02, 0x00, 0x00, 0x13, 0x0f, 0x00, 0x00, 0x13, 0x12,
+			})
+			_ = protocol.WritePacket(conn, initResp)
+
+		case protocol.ActionIDPlayerInitStep2:
+			// 响应场景初始化步 2 确认
+			initResp2 := protocol.NewPacket(protocol.ActionIDPlayerInitStep2, []byte{0x00})
+			_ = protocol.WritePacket(conn, initResp2)
 
 		case protocol.ActionIDStLogin:
 			// 响应跨服登录成功，并推送 0x0300 初始体力

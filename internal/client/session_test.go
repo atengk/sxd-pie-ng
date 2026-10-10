@@ -193,6 +193,7 @@ func TestRoleSession_Heartbeat(t *testing.T) {
 		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return clientConn, nil
 		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
 	}
 
 	session := client.NewRoleSession(cfg)
@@ -369,6 +370,7 @@ func TestRoleSession_SendCompressed_Active(t *testing.T) {
 		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return clientConn, nil
 		},
+		Authenticator: func(s *client.RoleSession) error { return nil },
 	}
 
 	session := client.NewRoleSession(cfg)
