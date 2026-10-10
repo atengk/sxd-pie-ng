@@ -96,6 +96,19 @@ _避免使用_: Third-Party Bot, External Ingress
 在网络 EOF 闪断或服务端凭证过期时，由状态机自动触发原生换票、地址重解析与无缝重连的长连接韧性架构。
 _避免使用_: Auto Reconnect, Simple Retry
 
+## 权威规范与研发技术文档索引 (Specifications)
+
+- **[协议规范白皮书 (Protocol Specification)](docs/protocol-spec.md)**:
+  定义大端序 `[4B Length] + [2B Module] + [2B Action] + Payload` 物理帧结构、类型编解码规范、透明 zlib 解压契约，并包含 `sxd.pcapng` 抓包真实黄金报文用例。
+- **[本地元数据库全量数据字典 (Database Dictionary)](docs/database-dictionary.md)**:
+  定义 `data/Pieb.db` 37 张数据表全量分类索引、实体关系图 (ERD) 与纯 Go SQLite 只读接入规范。
+- **[玩法子系统与规则白皮书 (Routine Specification)](docs/routine-spec.md)**:
+  全面对齐原版 `pieb.ini`（23 个核心子系统）与 `01.ini`，规范六大领域包的任务状态机、卫语句检查与发包时序。
+- **[逆向侦察与分析报告合集 (Research & Reconnaissance)](docs/research/pie_reverse_engineering_master_index.md)**:
+  包含原版 `pie.exe` 的 PE 架构侦察、双重嵌套加壳脱壳指南、数据模型推导与网络通信逆向成果。
+- **[架构决策记录 (ADR)](docs/adr/)**:
+  涵盖从 ADR 0001 至 ADR 0012 的完整架构演进决策。
+
 
 
 
