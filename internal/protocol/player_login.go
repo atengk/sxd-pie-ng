@@ -204,3 +204,94 @@ func isLikelyName(b []byte, offset int) (int, bool) {
 	}
 	return nLen, true
 }
+
+// PlayerLoginAuthResponse 代表角色主服网关认证握手响应 (Module 0, Action 0)。
+type PlayerLoginAuthResponse struct {
+	Reserved   uint32
+	ResultCode uint8 // 4 代表登录成功
+	RawPayload []byte
+}
+
+// ParsePlayerLoginAuthResponse 解析角色网关登录认证握手响应。
+// 对应 Golden Case 2: 00 00 00 1a 00 00 00 00 00 00 00 00 04 0a ...
+//
+// @param payload 原始封包载荷切片
+// @return 登录认证响应模型或错误
+func ParsePlayerLoginAuthResponse(payload []byte) (*PlayerLoginAuthResponse, error) {
+	if len(payload) < 5 {
+		return nil, ErrPlayerLoginPayloadTooShort
+	}
+
+	r := NewReader(payload)
+	reserved, err := r.ReadUint32()
+	if err != nil {
+		return nil, err
+	}
+
+	resultCode, err := r.ReadUint8()
+	if err != nil {
+		return nil, err
+	}
+
+	return &PlayerLoginAuthResponse{
+		Reserved:   reserved,
+		ResultCode: resultCode,
+		RawPayload: payload,
+	}, nil
+}
+
+// BuildPlayerInitStep1Packet 构造角色场景初始化握手步 1 封包 (ActionID 0x00000048)。
+// 对应 Golden Case 3: 00 00 00 08 00 00 00 48 00 00 00 00
+//
+// @param param 初始化参数 (通常为 0)
+// @return 编码好的封包实例
+func BuildPlayerInitStep1Packet(param int32) *Packet {
+	w := NewWriter()
+	w.WriteInt32(param)
+	return NewPacket(ActionIDPlayerInitStep1, w.Bytes())
+}
+
+// PlayerInitStep1Result 角色场景初始化响应模型。
+type PlayerInitStep1Result struct {
+	TownID   int32
+	TownLine int16
+	SceneID  int32
+	TargetID int32
+}
+
+// ParsePlayerInitStep1Result 解析场景初始化步 1 响应。
+// 对应 Golden Case 3: 00 00 00 12 00 00 00 48 00 00 13 0f 00 02 00 00 13 0f 00 00 13 12
+//
+// @param payload 原始封包载荷切片
+// @return 场景初始化响应结果或错误
+func ParsePlayerInitStep1Result(payload []byte) (*PlayerInitStep1Result, error) {
+	if len(payload) < 14 {
+		return nil, ErrPayloadTruncated
+	}
+
+	r := NewReader(payload)
+	townID, err := r.ReadInt32()
+	if err != nil {
+		return nil, err
+	}
+	townLine, err := r.ReadInt16()
+	if err != nil {
+		return nil, err
+	}
+	sceneID, err := r.ReadInt32()
+	if err != nil {
+		return nil, err
+	}
+	targetID, err := r.ReadInt32()
+	if err != nil {
+		return nil, err
+	}
+
+	return &PlayerInitStep1Result{
+		TownID:   townID,
+		TownLine: townLine,
+		SceneID:  sceneID,
+		TargetID: targetID,
+	}, nil
+}
+
