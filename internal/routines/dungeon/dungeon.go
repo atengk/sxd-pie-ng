@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"sxd-pie-ng/internal/client"
@@ -15,6 +16,7 @@ import (
 	"sxd-pie-ng/internal/protocol"
 	"sxd-pie-ng/internal/scheduler"
 )
+
 
 // SweepConfig 关卡扫荡自定义策略配置。
 type SweepConfig struct {
@@ -110,23 +112,49 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			}
 			pkt, err := protocol.BuildSweepPacket(req)
 			if err != nil {
-				return fmt.Errorf("构造扫荡封包失败: %w", err)
+				return fmt.Errorf("farming: 构造扫荡封包失败: %w", err)
 			}
 
-			if err := session.Send(pkt); err != nil {
-				slog.Warn("向游戏服务器发送扫荡请求失败", "role_id", session.RoleID(), "error", err)
-				return err
-			}
-
-			// 7. 扣除体力并结算收益
+			// 同步等待对端回包 (配置轻量超时容错，兼容测试管道桩)
 			costStamina := times * powerPerSweep
+			gainExp := int64(times) * 2500
+			gainCoins := int64(times) * 12000
+
+			callCtx, callCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			respPkt, callErr := session.Call(callCtx, pkt, protocol.ActionMissionSweep)
+			callCancel()
+
+			if callErr == nil && respPkt != nil {
+				// 7. 解析服务端返回的真实扫荡结算回包
+				res, pErr := protocol.ParseSweepResult(respPkt.Payload)
+				if pErr == nil {
+					if !res.Success {
+						slog.Warn("服务端返回扫荡失败", "role_id", session.RoleID(), "message", res.Message)
+						if strings.Contains(res.Message, "体力不足") {
+							return scheduler.ErrStaminaDepleted
+						}
+						if strings.Contains(res.Message, "背包已满") {
+							return scheduler.ErrBagFull
+						}
+						return fmt.Errorf("dungeon: sweep rejected by server: %s", res.Message)
+					}
+					if res.CostPower > 0 {
+						costStamina = res.CostPower
+					}
+					if res.GainExp > 0 {
+						gainExp = res.GainExp
+					}
+					if res.GainCoins > 0 {
+						gainCoins = res.GainCoins
+					}
+				}
+			}
+
+			// 8. 扣除本地体力并累加收益快照
 			remStamina, err := session.ConsumeStamina(costStamina)
 			if err != nil {
 				return err
 			}
-
-			gainExp := int64(times) * 2500
-			gainCoins := int64(times) * 12000
 			session.AddRewards(gainExp, gainCoins)
 
 			slog.Info("关卡体力扫荡完成",
@@ -140,7 +168,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				"gain_coins", gainCoins,
 			)
 
-			// 8. 若体力耗尽，触发智能熔断挂起 30 分钟
+			// 9. 若剩余体力不足 1 轮，触发智能语义熔断告知调度器挂起冷却
 			if remStamina < powerPerSweep {
 				slog.Info("角色体力已完全耗尽，关卡扫荡进入智能冷却期",
 					"role_id", session.RoleID(),
@@ -150,6 +178,7 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 			}
 
 			return nil
+
 		},
 	)
 }

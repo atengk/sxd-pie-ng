@@ -343,3 +343,114 @@ func TestDungeonSweep_ServerPropUpdateSync(t *testing.T) {
 		t.Errorf("期望体力同步为 146, 实际为 %d", rem)
 	}
 }
+
+// TestDungeonSweep_ServerResponse_RewardSync 验证接收到服务端真实扫荡结算回包时的收益同步与精准扣减
+func TestDungeonSweep_ServerResponse_RewardSync(t *testing.T) {
+	sess, srvConn := createTestSession(t, 100)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	initialCoins := sess.GetPlayerState().Coins
+
+	// 模拟服务端接收扫荡并回复真实结算包
+	go func() {
+		pkt, err := protocol.ReadPacket(srvConn)
+		if err != nil {
+			return
+		}
+		if pkt.ActionID == protocol.ActionMissionSweep {
+			req, _ := protocol.ParseSweepRequest(pkt.Payload)
+			// 服务端回包：10 次，扣除 50 体力，产出 35,000 经验与 180,000 铜钱
+			res := protocol.SweepResult{
+				Success:   true,
+				MissionID: req.MissionID,
+				Times:     req.Times,
+				CostPower: 50,
+				GainExp:   35000,
+				GainCoins: 180000,
+				Message:   "扫荡完成",
+			}
+			respPkt, _ := protocol.BuildSweepResultPacket(res)
+			_ = protocol.WritePacket(srvConn, respPkt)
+		}
+	}()
+
+	routine := dungeon.NewDungeonSweepRoutine(nil)
+	err := routine.Execute(context.Background(), sess, nil)
+	if err != nil {
+		t.Fatalf("扫荡执行失败: %v", err)
+	}
+
+	// 验证体力扣减
+	if rem := sess.GetStamina(); rem != 50 {
+		t.Errorf("期望剩余体力 50, 实际为 %d", rem)
+	}
+
+	// 验证铜钱收益按服务端回包增加 180,000
+	if currentCoins := sess.GetPlayerState().Coins; currentCoins != initialCoins+180000 {
+		t.Errorf("期望铜钱增加 180,000, 实际为 %d (初始: %d)", currentCoins, initialCoins)
+	}
+}
+
+// TestDungeonSweep_ServerRejection_StaminaDepleted 验证当服务端返回“体力不足”时触发语义智能熔断
+func TestDungeonSweep_ServerRejection_StaminaDepleted(t *testing.T) {
+	sess, srvConn := createTestSession(t, 50)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	go func() {
+		pkt, err := protocol.ReadPacket(srvConn)
+		if err != nil {
+			return
+		}
+		if pkt.ActionID == protocol.ActionMissionSweep {
+			req, _ := protocol.ParseSweepRequest(pkt.Payload)
+			res := protocol.SweepResult{
+				Success:   false,
+				MissionID: req.MissionID,
+				Times:     req.Times,
+				Message:   "体力不足，扫荡失败",
+			}
+			respPkt, _ := protocol.BuildSweepResultPacket(res)
+			_ = protocol.WritePacket(srvConn, respPkt)
+		}
+	}()
+
+	routine := dungeon.NewDungeonSweepRoutine(nil)
+	err := routine.Execute(context.Background(), sess, nil)
+	if !errors.Is(err, scheduler.ErrStaminaDepleted) {
+		t.Fatalf("期望服务端拒绝时触发 ErrStaminaDepleted, 实际返回: %v", err)
+	}
+}
+
+// TestDungeonSweep_ServerRejection_BagFull 验证当服务端返回“背包已满”时触发背包语义熔断
+func TestDungeonSweep_ServerRejection_BagFull(t *testing.T) {
+	sess, srvConn := createTestSession(t, 50)
+	defer sess.Close()
+	defer srvConn.Close()
+
+	go func() {
+		pkt, err := protocol.ReadPacket(srvConn)
+		if err != nil {
+			return
+		}
+		if pkt.ActionID == protocol.ActionMissionSweep {
+			req, _ := protocol.ParseSweepRequest(pkt.Payload)
+			res := protocol.SweepResult{
+				Success:   false,
+				MissionID: req.MissionID,
+				Times:     req.Times,
+				Message:   "背包已满，无法放入掉落物品",
+			}
+			respPkt, _ := protocol.BuildSweepResultPacket(res)
+			_ = protocol.WritePacket(srvConn, respPkt)
+		}
+	}()
+
+	routine := dungeon.NewDungeonSweepRoutine(nil)
+	err := routine.Execute(context.Background(), sess, nil)
+	if !errors.Is(err, scheduler.ErrBagFull) {
+		t.Fatalf("期望服务端拒绝时触发 ErrBagFull, 实际返回: %v", err)
+	}
+}
+
