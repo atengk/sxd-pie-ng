@@ -306,6 +306,27 @@ func run(ctx context.Context, args []string) error {
 				}
 			}
 
+			// 装配自愈凭据刷新管道: 断线时自动使旧 Ticket 失效并全自治重新向 Web 换票
+			if acc.Platform != "" && acc.Username != "" && acc.Password != "" {
+				pName := acc.Platform
+				uName := acc.Username
+				pWord := acc.Password
+				sID := role.ServerID
+				roleCfg.MaxReconnectAttempts = 10
+				roleCfg.RefreshCredentials = func(c context.Context, sCfg *client.SessionConfig) error {
+					ticketCache.Invalidate(pName, uName, sID)
+					freshTicket, err := ticketCache.GetOrFetch(c, pName, uName, pWord, sID)
+					if err != nil {
+						return err
+					}
+					client.ApplyTicket(sCfg, freshTicket)
+					if freshTicket.GatewayURL != "" {
+						sCfg.ServerAddr = freshTicket.GatewayURL
+					}
+					return nil
+				}
+			}
+
 			sess := client.NewRoleSession(roleCfg)
 			mgr.sessions = append(mgr.sessions, sess)
 			mgr.roles = append(mgr.roles, web.RoleInfo{

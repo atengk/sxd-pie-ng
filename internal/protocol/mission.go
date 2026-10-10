@@ -18,6 +18,8 @@ const (
 	ActionPlayerInfo uint32 = 0x00000002
 	// ActionEnterTown 进入城镇协议号
 	ActionEnterTown uint32 = 0x00010000
+	// ActionMissionEnter 进入/查询关卡协议号 (Module 35, Action 0)
+	ActionMissionEnter uint32 = 0x00230000
 	// ActionMissionSweep 关卡副本扫荡请求与响应协议号 (Module 35, Action 2)
 	ActionMissionSweep uint32 = 0x00230002
 )
@@ -51,6 +53,15 @@ type SweepResult struct {
 	GainCoins int64
 	// Message 结算描述信息 (如 "扫荡完成", "体力不足", "背包已满")
 	Message string
+}
+
+// BuildEnterMissionPacket 构造进入/激活关卡请求封包。
+func BuildEnterMissionPacket(missionID uint32) *Packet {
+	w := NewWriter()
+	// 真实网关二进制帧格式: [2B MissionID] + [4B 00 23 00 00]
+	w.WriteUint16(uint16(missionID))
+	w.WriteBytes([]byte{0x00, 0x23, 0x00, 0x00})
+	return NewPacket(ActionMissionEnter, w.Bytes())
 }
 
 // BuildSweepPacket 构造关卡扫荡二进制协议请求封包。

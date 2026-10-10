@@ -95,8 +95,9 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 					missionName = highest.Name
 				}
 			}
-			if missionID <= 0 {
-				missionID = 105
+			if missionID <= 0 || missionID > 150 {
+				missionID = 43
+				missionName = "扬州城-万妖皇"
 			}
 
 			// 5. 计算本次可扫荡次数
@@ -106,7 +107,10 @@ func NewDungeonSweepRoutine(dictRepo dictionary.Repository, cfgs ...SweepConfig)
 				times = cfg.MaxBatchTimes
 			}
 
-			// 6. 构造并发送二进制扫荡封包
+			// 6. 前置关卡激活与上下文同步 (Module 35, Action 0)
+			enterPkt := protocol.BuildEnterMissionPacket(uint32(missionID))
+			_ = session.Send(enterPkt)
+
 			req := protocol.SweepRequest{
 				MissionID: uint32(missionID),
 				Times:     uint16(times),

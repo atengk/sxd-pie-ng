@@ -74,6 +74,8 @@ type SessionConfig struct {
 	Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 	// Authenticator 自定义登录握手逻辑
 	Authenticator AuthenticatorFunc
+	// RefreshCredentials 凭据自愈刷新回调：在网络闪断或会话重连前自动换取最新一次性 Hash 凭据
+	RefreshCredentials func(ctx context.Context, cfg *SessionConfig) error
 }
 
 // PlayerState 纳管角色在游戏世界中的动态属性与资源状态。
@@ -614,7 +616,16 @@ func (s *RoleSession) runLoop() {
 		default:
 		}
 
-		// 1. 建立 TCP Socket 连接
+		// 1. 若处于重连状态且配置了自愈回调，重新换取最新平台动态凭据
+		if s.State() == StateReconnecting && s.cfg.RefreshCredentials != nil {
+			slog.Info("正在通过自愈管道重新换取最新平台动态凭据...", "role_id", s.cfg.RoleID)
+			if rErr := s.cfg.RefreshCredentials(s.ctx, &s.cfg); rErr != nil {
+				slog.Warn("凭据自愈换票未成功", "role_id", s.cfg.RoleID, "error", rErr)
+			} else {
+				slog.Info("凭据自愈换票成功，已装载新动态凭据", "role_id", s.cfg.RoleID, "server_addr", s.cfg.ServerAddr)
+			}
+		}
+
 		if s.State() != StateReconnecting {
 			s.setState(StateConnecting)
 		}
